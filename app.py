@@ -30,11 +30,35 @@ st.set_page_config(
     layout="wide"
 )
 
-# API key (REPLACE WITH ACTUAL KEY)
+# ==========================================
+# SECURE API KEY LOADING
+# ==========================================
+
 import os
 
-# Get API key from Streamlit secrets (secure)
-openai.api_key = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"))
+# Get API key from environment/secrets (NEVER hardcoded)
+try:
+    # Try Streamlit secrets first (production)
+    api_key = st.secrets["OPENAI_API_KEY"]
+except:
+    # Fall back to environment variable (local development)
+    api_key = os.getenv("OPENAI_API_KEY")
+
+# Validate API key exists
+if not api_key:
+    st.error("""
+    ⚠️ **API Key Not Found**
+    
+    Please set your OpenAI API key:
+    - **For Streamlit Cloud:** Add to Secrets in deployment settings
+    - **For local:** Create `.streamlit/secrets.toml` with your key
+    
+    See README for instructions.
+    """)
+    st.stop()
+
+# Set the API key
+openai.api_key = api_key
 
 # ==========================================
 # HEADER
