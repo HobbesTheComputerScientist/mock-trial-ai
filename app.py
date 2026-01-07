@@ -1,5 +1,5 @@
 import streamlit as st
-import openai
+from openai import OpenAI
 import PyPDF2
 import io
 import datetime
@@ -56,7 +56,8 @@ if not api_key:
     st.error("⚠️ **API Key Not Found** - Please configure your OpenAI API key")
     st.stop()
 
-openai.api_key = api_key
+# Initialize OpenAI client
+client = OpenAI(api_key=api_key)
 
 # ==========================================
 # HELPER FUNCTIONS
@@ -74,96 +75,109 @@ def extract_text_from_pdf(pdf_file):
         st.error(f"Error reading PDF: {str(e)}")
         return None
 
-def preprocess_case(case_text):
+def aggressive_preprocess(case_text):
     """
-    Clean case text to remove meta-information that causes hallucinations.
+    Aggressively remove ALL meta-information before sending to AI.
+    This is the #1 defense against hallucination.
     """
-    meta_phrases = [
-        "in honor of",
-        "dedicated to",
-        "this case was created",
-        "written by",
-        "authored by",
-        "competition rules",
-        "time limits",
-        "scoring rubric",
-        "judge instructions",
-        "for educational purposes",
-        "mock trial competition"
+    # Meta-information patterns to remove
+    meta_patterns = [
+        # Dedications and honors
+        "in honor of", "dedicated to", "in memory of", "this case honors",
+        # Authorship
+        "written by", "authored by", "created by", "developed by",
+        # Competition info
+        "mock trial competition", "competition rules", "tournament",
+        # Instructions
+        "judge instructions", "scoring", "time limit", "points",
+        # Educational
+        "for educational purposes", "learning objectives",
+        # Case creation metadata
+        "case writer", "based on", "inspired by",
+        # Copyright and admin
+        "copyright", "all rights reserved", "©",
+        # Page numbers and formatting
+        "page ", "exhibit ", "stipulation"
     ]
     
     lines = case_text.split('\n')
     cleaned_lines = []
     
     for line in lines:
-        line_lower = line.lower()
-        is_meta = any(phrase in line_lower for phrase in meta_phrases)
+        line_lower = line.strip().lower()
         
-        if len(line.strip()) < 10:
-            is_meta = True
+        # Skip empty or very short lines
+        if len(line_lower) < 15:
+            continue
         
-        if not is_meta:
-            cleaned_lines.append(line)
+        # Skip lines with meta-patterns
+        has_meta = any(pattern in line_lower for pattern in meta_patterns)
+        if has_meta:
+            continue
+        
+        # Skip lines that are all caps (usually headers/instructions)
+        if line.strip().isupper() and len(line.strip()) > 5:
+            continue
+        
+        # Keep this line
+        cleaned_lines.append(line)
     
-    return '\n'.join(cleaned_lines)
+    cleaned_text = '\n'.join(cleaned_lines)
+    
+    # Remove multiple blank lines
+    while '\n\n\n' in cleaned_text:
+        cleaned_text = cleaned_text.replace('\n\n\n', '\n\n')
+    
+    return cleaned_text.strip()
 
 def smart_summarize_case(case_text):
     """
-    Intelligently condense case while preserving ALL critical details.
+    Use AI to condense while preserving ALL legal content.
+    Only triggers for very long cases.
     """
-    if len(case_text) <= 18000:
+    if len(case_text) <= 20000:  # Increased threshold
         return case_text
     
-    summary_prompt = f"""Extract case content, preserving ALL critical details.
+    summary_prompt = f"""You are extracting ONLY the legal case content from this document.
 
-INCLUDE everything about:
-- Charges/claims (exact wording)
-- All parties and witnesses (full descriptions)
-- Timeline of events (all dates, times, sequences)
-- All evidence (detailed descriptions)
-- All witness statements (preserve key quotes and testimony details)
-- Disputed facts and contradictions
-- Legal elements that must be proven
-- Credibility issues
+RULES - FOLLOW EXACTLY:
+1. INCLUDE all charges, parties, witnesses, dates, locations, events, evidence, testimony
+2. PRESERVE exact names, numbers, quotes
+3. KEEP all contradictions and disputed facts
+4. EXCLUDE dedications, author info, competition rules, instructions
 
-EXCLUDE only:
-- Dedications, authorship
-- Procedural instructions
-- Judge/competition guidelines
+Output ONLY the case facts. No preamble.
 
-CRITICAL: Keep MORE detail than usual. Preserve nuance, contradictions, and complexity.
+Document:
+{case_text[:20000]}
 
-Case Packet:
-{case_text}
-
-Provide detailed case content:"""
+Case content only:"""
 
     try:
-        response = openai.chat.completions.create(
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You preserve ALL case details. Keep complexity, contradictions, and nuance. Remove only meta-information."},
+                {"role": "system", "content": "Extract case content only. Preserve all legal details. Remove meta-information."},
                 {"role": "user", "content": summary_prompt}
             ],
-            temperature=0.2,
-            max_tokens=5000
+            temperature=0.1,  # Very low - maximum factuality
+            max_tokens=6000
         )
         return response.choices[0].message.content
     except:
-        return case_text[:18000]
+        return case_text[:20000]
 
 def estimate_cost(tokens):
     """Calculate estimated API cost"""
     return (tokens / 1000) * 0.00175
 
-def call_openai(system_prompt, user_prompt, max_tokens=2200, temperature=0.35):
+def call_openai(system_prompt, user_prompt, max_tokens=2400, temperature=0.25):
     """
-    Make OpenAI API call with better completion handling.
-    Increased to 2200 tokens - still under 2 cents.
-    Detects and handles truncation.
+    Make OpenAI API call with maximum hallucination prevention.
+    Temperature 0.25 = extremely factual (was 0.35)
     """
     try:
-        response = openai.chat.completions.create(
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -171,17 +185,16 @@ def call_openai(system_prompt, user_prompt, max_tokens=2200, temperature=0.35):
             ],
             temperature=temperature,
             max_tokens=max_tokens,
-            presence_penalty=0.1,
-            frequency_penalty=0.0
+            presence_penalty=0.2,  # Increased - discourages new topics
+            frequency_penalty=0.0  # Allow repeating case facts
         )
         
         # Check if response was truncated
         finish_reason = response.choices[0].finish_reason
         content = response.choices[0].message.content
         
-        # If truncated, add notice
         if finish_reason == "length":
-            content += "\n\n---\n⚠️ *Analysis truncated due to length. Consider analyzing specific sections (like 'Prosecution Arguments' or 'Key Facts Only') separately for complete detail.*"
+            content += "\n\n---\n⚠️ *Analysis truncated. Try a more specific analysis type for complete results.*"
         
         return content, response.usage.total_tokens
     except Exception as e:
@@ -202,15 +215,6 @@ if 'witness_name' not in st.session_state:
     st.session_state.witness_name = ""
 if 'total_cost' not in st.session_state:
     st.session_state.total_cost = 0.0
-if 'daily_analyses' not in st.session_state:
-    st.session_state.daily_analyses = 0
-if 'last_reset' not in st.session_state:
-    st.session_state.last_reset = datetime.date.today()
-
-# Reset daily counter
-if st.session_state.last_reset != datetime.date.today():
-    st.session_state.daily_analyses = 0
-    st.session_state.last_reset = datetime.date.today()
 
 # ==========================================
 # HEADER
@@ -222,7 +226,7 @@ st.markdown("*Built by Vihaan Paka-Hegde - University High School*")
 st.markdown("---")
 
 # ==========================================
-# SIDEBAR - MODE SELECTION
+# SIDEBAR
 # ==========================================
 
 with st.sidebar:
@@ -237,9 +241,9 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("**💡 Tips**")
     if mode == "Case Analysis":
-        st.info("Upload PDF or paste text for comprehensive AI analysis")
+        st.info("The AI analyzes ONLY facts explicitly stated in your case packet. Upload PDF or paste text.")
     else:
-        st.info("Practice realistic witness examination with AI")
+        st.info("AI simulates a witness based strictly on their testimony in the case.")
 
 # ==========================================
 # MODE 1: CASE ANALYSIS
@@ -267,7 +271,7 @@ if mode == "Case Analysis":
         with st.spinner("📄 Extracting text from PDF..."):
             case_text = extract_text_from_pdf(uploaded_file)
             if case_text:
-                st.success(f"✅ Extracted {len(case_text):,} characters from PDF")
+                st.success(f"✅ Extracted {len(case_text):,} characters")
     else:
         case_text = case_text_input
     
@@ -300,444 +304,385 @@ if mode == "Case Analysis":
     if st.button("🚀 Analyze Case", type="primary"):
         
         if not case_text or len(case_text) < 50:
-            st.error("⚠️ Please provide case text (upload PDF or paste text)")
+            st.error("⚠️ Please provide case text")
             st.stop()
         
         if analysis_type == "Witness Questions" and not witness_name_input:
             st.error("⚠️ Please enter witness name")
             st.stop()
         
-        # Check daily limit (optional - comment out if you don't want limits)
-        # if st.session_state.daily_analyses >= 100:
-        #     st.error("⚠️ Daily usage limit reached. Please try again tomorrow.")
-        #     st.stop()
-        
-        with st.spinner("🔍 Processing case packet..."):
-            case_text_cleaned = preprocess_case(case_text)
+        with st.spinner("🔍 Processing and cleaning case packet..."):
+            # CRITICAL: Aggressive preprocessing
+            case_text_cleaned = aggressive_preprocess(case_text)
             
-            if len(case_text_cleaned) > 18000:
-                st.info("📋 Processing lengthy case packet...")
+            if len(case_text_cleaned) > 20000:
+                st.info("📋 Condensing lengthy case while preserving all facts...")
                 case_text_processed = smart_summarize_case(case_text_cleaned)
             else:
                 case_text_processed = case_text_cleaned
         
-        # Enhanced system prompt
-        base_system = """You are an expert Mock Trial attorney and coach with deep experience analyzing complex cases.
+        # MAXIMUM ANTI-HALLUCINATION SYSTEM PROMPT
+        base_system = """You are an expert Mock Trial coach. You analyze ONLY what is explicitly written in the case packet.
 
-ANALYSIS REQUIREMENTS:
-1. Identify the MOST LEGALLY SIGNIFICANT facts - not just basic information
-2. Focus on DISPUTED facts, CONTRADICTIONS, and CREDIBILITY issues
-3. Analyze STRATEGIC implications - what facts help which side and why
-4. Consider LEGAL ELEMENTS - what must be proven for each charge/claim
-5. Highlight EVIDENTIARY issues - admissibility, weight, reliability
-6. Note TIMELINE inconsistencies and witness credibility problems
-7. Use exact quotes when referencing testimony or evidence
+ABSOLUTE RULES - VIOLATIONS ARE UNACCEPTABLE:
 
-FORBIDDEN:
-- Do not cite facts from dedications or case creation info
-- Do not invent legal precedents
-- Do not add facts not in the case
-- Do not give basic/obvious information - go deeper
+1. ONLY STATE FACTS EXPLICITLY WRITTEN IN THE CASE PACKET
+   - If you're not 100% certain a fact is in the case, DO NOT include it
+   - Quote directly when possible
+   - Cite sources (witness name, exhibit number)
 
-You provide comprehensive, strategic analysis for competitive mock trial preparation."""
+2. NEVER INVENT OR ASSUME:
+   - Do not invent case citations or legal precedents
+   - Do not assume facts not stated
+   - Do not add details from your general knowledge
+   - Do not reference people mentioned in dedications/honors as case participants
 
-        # IMPROVED PROMPTS
+3. DISTINGUISH META-INFO FROM CASE CONTENT:
+   - Dedications, honors, authorship = NOT part of case
+   - Competition rules, instructions = NOT part of case
+   - ONLY analyze the legal dispute, parties, witnesses, evidence
+
+4. WHEN UNCERTAIN:
+   - State "This is not specified in the case packet"
+   - Do not guess or infer beyond what's written
+   - Acknowledge gaps in information
+
+5. ACCURACY OVER COMPLETENESS:
+   - Better to provide less information that's accurate
+   - Than more information with invented details
+
+Your analysis must be 100% grounded in the case packet provided."""
+
+        # IMPROVED PROMPTS WITH EVEN STRONGER CONSTRAINTS
         prompts = {
-            "Full Case Analysis": f"""Provide a COMPREHENSIVE strategic analysis of this case.
+            "Full Case Analysis": f"""Analyze this case using ONLY information explicitly stated below.
 
-Your analysis must be thorough and competition-ready. Include:
+BEFORE YOU START:
+1. Read the entire case carefully
+2. Identify: Who are the actual PARTIES? Who are the WITNESSES?
+3. Ignore any dedications, honors, or case creation information
+
+PROVIDE:
 
 **1. CASE OVERVIEW**
-- Parties (plaintiff/defendant) and their relationship
-- Charges/claims with specific legal elements
-- Key dates and timeline of events
+- Parties in the case (plaintiff/defendant or prosecution/defendant)
+- Charges or claims
+- Key dates and locations
 
 **2. CRITICAL FACTS (15-20 facts)**
-Focus on facts that are:
-- Legally significant (prove/disprove elements)
-- Disputed or contradicted between witnesses
-- Credibility indicators
-- Strategic advantages for either side
+For each fact:
+- State the fact with exact details
+- Quote source if from testimony: "According to [Witness], '[exact quote]'"
+- Explain legal significance
+- Note which side it helps
+- Cite source (witness name or exhibit)
 
-For each critical fact:
-- State the fact specifically
-- Explain WHY it matters legally
-- Note which side it helps/hurts
-- Identify source (which witness/evidence)
+Focus on: disputed facts, contradictions, timeline issues, credibility problems
 
-**3. LEGAL ISSUES & ELEMENTS**
-- What must be proven for prosecution/plaintiff to win?
-- What are the key legal questions/disputes?
-- What defenses are available?
-
-**4. PROSECUTION/PLAINTIFF THEORY**
-- Overall narrative and theme
-- How they prove each element
-- Their strongest evidence
-- How they handle weaknesses
-
-**5. DEFENSE THEORY**
-- Overall narrative and theme
-- How they create reasonable doubt / rebut claims
-- Their strongest evidence
-- How they handle weaknesses
-
-**6. WITNESS ANALYSIS**
-For each key witness:
-- Role and importance
-- Credibility strengths/weaknesses
-- What they establish
-- Contradictions or inconsistencies
-
-**7. EVIDENCE ANALYSIS**
-- Most important exhibits
-- Admissibility issues
-- How each side uses evidence
-- Evidentiary gaps or problems
-
-**8. STRATEGIC RECOMMENDATIONS**
-- Key points for each side to emphasize
-- Weaknesses to address
-- Potential objections or challenges
-- Areas for cross-examination focus
-
-Be specific. Quote testimony. Cite evidence. Analyze deeply.
-
-Case Content:
-{case_text_processed}""",
-            
-            "Key Facts Only": f"""Identify the 20 MOST STRATEGICALLY IMPORTANT facts in this case.
-
-REQUIREMENTS:
-- Focus on DISPUTED facts and CONTRADICTIONS
-- Prioritize facts related to LEGAL ELEMENTS that must be proven
-- Include CREDIBILITY indicators (bias, inconsistency, implausibility)
-- Note TIMELINE issues
-- Highlight facts with EVIDENTIARY significance
-
-For EACH fact provide:
-1. The specific fact (with exact quote if from testimony)
-2. WHY this fact is legally significant
-3. Which side it helps (and why)
-4. What it proves or undermines
-5. Source (which witness/exhibit)
-
-Format:
-**FACT #1: [Specific fact with details]**
-- Legal significance: [Why it matters for proving/disproving elements]
-- Strategic value: [Which side benefits and how]
-- Source: [Witness name or exhibit number]
-
-Do NOT include basic background facts. Focus on facts that WIN or LOSE the case.
-
-Case Content:
-{case_text_processed}""",
-            
-            "Legal Issues": f"""Identify and analyze the KEY LEGAL ISSUES in this case.
-
-For EACH legal issue provide:
-
-**1. THE LEGAL QUESTION**
-- State the specific legal issue clearly
-- What legal standard or element is at stake?
-
-**2. APPLICABLE LAW**
-- What must be proven? (burden of proof, elements)
-- What is the legal test or standard?
-
-**3. FACTS SUPPORTING EACH SIDE**
-- Prosecution/plaintiff evidence on this issue
-- Defense evidence on this issue
-- Which side has stronger position and why?
-
-**4. STRATEGIC ANALYSIS**
-- How should each side argue this issue?
-- What evidence to emphasize?
-- Potential weaknesses to address?
-
-**5. EVIDENTIARY CONSIDERATIONS**
-- What evidence is admissible?
-- Any objections likely?
-- Weight/credibility of evidence?
-
-Focus on 4-6 major legal issues. Analyze thoroughly.
-
-Case Content:
-{case_text_processed}""",
-            
-            "Prosecution Arguments": f"""Develop 5 STRONG prosecution/plaintiff arguments with full strategic analysis.
-
-For EACH argument provide:
-
-**ARGUMENT #[X]: [Clear statement of argument]**
-
-**Theory:** [How this fits into overall case theory]
-
-**Legal Elements:** [Which elements this helps prove]
-
-**Supporting Evidence:**
-- Witness testimony (with specific quotes)
-- Physical evidence (with exhibit details)
-- Circumstantial evidence
-- Expert testimony (if applicable)
-
-**Why This Argument Works:**
-- Logical reasoning
-- Credibility factors
-- Timeline support
-- Corroboration
-
-**Anticipated Defense Response:**
-- How defense will attack this argument
-- Defense evidence to counter
-
-**Rebuttal Strategy:**
-- How to respond to defense attacks
-- Additional points to emphasize
-- Impeachment opportunities
-
-**Cross-Examination Focus:**
-- Which defense witnesses to target
-- What to establish on cross
-
-Be specific. Quote testimony. Cite exhibits. Think strategically.
-
-Case Content:
-{case_text_processed}""",
-            
-            "Defense Arguments": f"""Develop 5 STRONG defense arguments with full strategic analysis.
-
-For EACH argument provide:
-
-**ARGUMENT #[X]: [Clear statement of argument]**
-
-**Theory:** [How this fits into overall defense theory]
-
-**Legal Elements:** [Which elements this challenges / reasonable doubt created]
-
-**Supporting Evidence:**
-- Witness testimony (with specific quotes)
-- Physical evidence (with exhibit details)
-- Lack of evidence / gaps in prosecution case
-- Inconsistencies or contradictions
-
-**Why This Argument Works:**
-- Logical reasoning
-- Credibility factors
-- Alternative explanations
+**3. LEGAL ISSUES**
+- What must be proven?
+- Key legal questions
 - Burden of proof considerations
 
-**Anticipated Prosecution Response:**
-- How prosecution will attack this argument
-- Prosecution evidence to counter
+**4. PROSECUTION/PLAINTIFF STRATEGY**
+- Theory of the case (based on their evidence)
+- Strongest arguments (cite specific evidence)
+- How they address weaknesses
 
-**Rebuttal Strategy:**
-- How to respond to prosecution attacks
-- Additional points to emphasize
-- Impeachment opportunities
+**5. DEFENSE STRATEGY**
+- Theory of the case (based on their evidence)
+- Strongest arguments (cite specific evidence)
+- How they create doubt
 
-**Cross-Examination Focus:**
-- Which prosecution witnesses to target
-- What to establish on cross
+**6. WITNESS CREDIBILITY**
+For key witnesses:
+- What they claim (with quotes)
+- Credibility strengths
+- Credibility weaknesses
+- Contradictions with other evidence
 
-Be specific. Quote testimony. Cite exhibits. Think strategically.
+**7. EVIDENCE EVALUATION**
+- Key exhibits and what they show
+- Corroboration or contradictions
+- Admissibility considerations
 
-Case Content:
-{case_text_processed}""",
-            
-            "Witness Questions": f"""Generate STRATEGIC examination questions for witness: {witness_name_input}
+**8. STRATEGIC INSIGHTS**
+- Critical points for each side
+- Vulnerabilities to exploit
+- Areas needing more development
 
-**WITNESS ANALYSIS:**
-First analyze this witness:
-- Role in the case
-- What they can establish
-- Credibility strengths/weaknesses
-- Key testimony points
-- Potential impeachment
+REMEMBER: Quote the case. Cite sources. No inventions.
 
-**DIRECT EXAMINATION (10-12 questions):**
-Foundation → Key facts → Credibility building
+===CASE PACKET BEGINS===
+{case_text_processed}
+===CASE PACKET ENDS===
 
-For each question note:
-- Purpose (what it establishes)
-- Follow-up opportunities
-- How it builds narrative
+Analyze using ONLY the information between the markers above.""",
 
-**CROSS EXAMINATION (10-12 questions):**
-Control → Undermine → Impeach
+            "Key Facts Only": f"""Extract the 20 most legally significant facts from this case.
 
-For each question note:
-- Strategic goal
-- Expected answer
-- Follow-up based on response
-- Impeachment opportunities
+INSTRUCTIONS:
+1. Read the case carefully
+2. Identify ONLY facts explicitly stated
+3. Focus on: disputed facts, contradictions, timeline issues, evidence problems
 
-**STRATEGIC NOTES:**
-- Key points to establish
-- Potential objections
-- Redirect opportunities
-- Witness vulnerabilities
+For EACH fact (numbered 1-20):
 
-Case Content:
-{case_text_processed}""",
-            
-            "Opening Statement Ideas": f"""Draft COMPREHENSIVE opening statement frameworks for BOTH sides.
+**FACT #X: [Specific fact]**
+- Quote: "[Exact quote from case if applicable]"
+- Source: [Witness name or exhibit number]
+- Legal significance: [Why this matters for proving/disproving elements]
+- Strategic value: [Which side this helps and why]
+
+CRITICAL: Do not invent facts. If uncertain, skip to next fact.
+
+===CASE PACKET===
+{case_text_processed}
+===END CASE PACKET===
+
+Provide 20 facts with analysis.""",
+
+            "Legal Issues": f"""Identify the key legal issues using ONLY information from this case.
+
+For each issue:
+
+**ISSUE #X: [Legal question]**
+- Elements to prove: [What must be shown]
+- Prosecution/Plaintiff evidence: [Specific facts from case]
+- Defense evidence: [Specific facts from case]
+- Analysis: [Which side has stronger position based on case facts]
+
+Do not cite legal cases not mentioned in the packet.
+
+===CASE PACKET===
+{case_text_processed}
+===END===
+
+Analyze based only on this case.""",
+
+            "Prosecution Arguments": f"""Develop 5 prosecution/plaintiff arguments using ONLY case facts.
+
+FIRST: Confirm the charges and what must be proven.
+
+For each argument:
+
+**ARGUMENT #X: [Clear argument statement]**
+
+Evidence supporting this argument:
+- Witness testimony: "[Quote]" - [Witness name]
+- Physical evidence: [Specific exhibit with details]
+- Additional facts: [From case]
+
+Why this is strong:
+- [Logical reasoning based on evidence]
+- [Corroboration from multiple sources]
+
+Defense counter-arguments:
+- [Based on defense evidence in case]
+
+Prosecution response:
+- [Using case facts]
+
+CRITICAL: All evidence must be from the case. No inventions.
+
+===CASE PACKET===
+{case_text_processed}
+===END===
+
+5 arguments with case-based evidence only.""",
+
+            "Defense Arguments": f"""Develop 5 defense arguments using ONLY case facts.
+
+FIRST: Confirm what prosecution must prove and defense position.
+
+For each argument:
+
+**ARGUMENT #X: [Clear argument statement]**
+
+Evidence supporting this argument:
+- Witness testimony: "[Quote]" - [Witness name]
+- Physical evidence: [Specific exhibit with details]
+- Gaps in prosecution case: [What they cannot prove]
+- Contradictions: [Specific inconsistencies in prosecution evidence]
+
+Why this creates reasonable doubt:
+- [Logical reasoning based on evidence]
+- [Alternative explanations supported by case facts]
+
+Prosecution counter-arguments:
+- [Based on prosecution evidence in case]
+
+Defense response:
+- [Using case facts]
+
+CRITICAL: All evidence must be from the case. No inventions.
+
+===CASE PACKET===
+{case_text_processed}
+===END===
+
+5 arguments with case-based evidence only.""",
+
+            "Witness Questions": f"""Generate strategic questions for witness: {witness_name_input}
+
+FIRST: Verify {witness_name_input} is actually a WITNESS in this case (not a case creator, dedicatee, or judge).
+
+If {witness_name_input} is a witness in the case:
+
+**WITNESS BACKGROUND**
+- Role in case: [What they witnessed/know]
+- Key testimony points: [From their statement]
+- Credibility issues: [Bias, inconsistency, etc.]
+
+**DIRECT EXAMINATION (10 questions)**
+- Foundation questions
+- Fact-establishing questions
+- Credibility-building questions
+
+For each: [Purpose] and [What it establishes]
+
+**CROSS-EXAMINATION (10 questions)**
+- Leading questions to control witness
+- Questions exposing contradictions
+- Impeachment questions
+
+For each: [Strategic goal] and [Expected answer]
+
+If {witness_name_input} is NOT a witness:
+State: "{witness_name_input} is not identified as a witness in this case packet."
+
+===CASE PACKET===
+{case_text_processed}
+===END===
+
+Base all questions on their actual testimony in the case.""",
+
+            "Opening Statement Ideas": f"""Draft opening statement frameworks using ONLY case facts.
 
 **PROSECUTION/PLAINTIFF OPENING:**
 
-1. **Hook** (30-45 seconds)
-   - Compelling opening line
-   - Theme introduction
-   - Emotional connection
+1. Hook (30 seconds)
+   - [Compelling opening based on case events]
+   - [Theme from case facts]
 
-2. **Charges/Claims** (1 minute)
-   - What defendant is charged with
-   - Legal elements explained simply
-   - Burden of proof
+2. Charges (1 minute)
+   - [Actual charges from case]
+   - [Elements that must be proven]
 
-3. **Story of the Case** (3-4 minutes)
-   - Timeline of events
-   - Key facts in narrative form
-   - Use present tense for impact
+3. Story (3 minutes)
+   - [Timeline from case]
+   - [Key events in narrative form]
+   - Quote key evidence
 
-4. **Evidence Preview** (2-3 minutes)
-   - Witness by witness (what each establishes)
-   - Key exhibits (what they prove)
-   - How evidence connects to elements
+4. Evidence Preview (2 minutes)
+   - Witness by witness: what each will testify to (from case)
+   - Key exhibits: what each shows (from case)
 
-5. **Theme & Closing** (30-45 seconds)
-   - Reinforce theme
-   - Final powerful line
+5. Closing Line
+   - [Powerful statement based on case theme]
 
 **DEFENSE OPENING:**
 
-1. **Hook** (30-45 seconds)
-   - Counter-narrative opening
-   - Defense theme
-   - Presumption of innocence
+1. Hook (30 seconds)
+   - [Defense theme from case]
+   - [Presumption of innocence]
 
-2. **Response to Charges** (1 minute)
-   - What prosecution must prove
-   - Burden is on them
-   - Reasonable doubt standard
+2. Burden (1 minute)
+   - [What prosecution must prove]
+   - [Why burden not met - based on case gaps]
 
-3. **Defense Story** (3-4 minutes)
-   - Alternative narrative
-   - Highlighting weaknesses in prosecution case
-   - Present tense, compelling story
+3. Defense Story (3 minutes)
+   - [Alternative narrative from defense evidence]
+   - [Highlighting prosecution weaknesses]
 
-4. **Evidence Preview** (2-3 minutes)
-   - Defense witnesses (what they'll show)
-   - Evidence supporting defense
-   - Gaps in prosecution case
+4. Evidence Preview (2 minutes)
+   - Defense evidence (from case)
+   - Prosecution gaps and contradictions (from case)
 
-5. **Theme & Closing** (30-45 seconds)
-   - Reinforce reasonable doubt
-   - Final powerful line
+5. Closing Line
+   - [Reasonable doubt statement]
 
-For each section, provide:
-- Specific language suggestions
-- Key facts to mention
-- Rhetorical techniques
-- Tone and delivery notes
+All suggestions must use actual case facts and evidence.
 
-Case Content:
-{case_text_processed}""",
-            
-            "Closing Statement Ideas": f"""Draft COMPREHENSIVE closing argument frameworks for BOTH sides.
+===CASE PACKET===
+{case_text_processed}
+===END===
+
+Use only case facts.""",
+
+            "Closing Statement Ideas": f"""Draft closing argument frameworks using ONLY case facts.
 
 **PROSECUTION/PLAINTIFF CLOSING:**
 
-1. **Opening** (1 minute)
-   - Powerful emotional hook
-   - Theme reinforcement
-   - Transition to argument
+1. Opening Hook
+   - [Emotional appeal based on case events]
 
-2. **Elements Proven** (4-5 minutes)
-   - Element by element analysis
-   - Evidence that proves each
-   - Connect testimony to elements
-   - Use "the evidence shows..."
+2. Elements Proven (element by element)
+   - Element 1: [Evidence from case that proves it]
+   - Element 2: [Evidence from case that proves it]
+   - [Continue for all elements]
 
-3. **Credibility Analysis** (2-3 minutes)
-   - Why prosecution witnesses are credible
-   - Why defense witnesses are not
-   - Contradictions in defense case
+3. Credibility
+   - Why prosecution witnesses are credible: [Based on their testimony]
+   - Why defense witnesses are not: [Based on contradictions in case]
 
-4. **Addressing Defense Arguments** (2 minutes)
-   - Anticipate main defense points
-   - Rebut with evidence
-   - Show why defense doesn't create reasonable doubt
+4. Defense Rebuttal
+   - [Address defense arguments using case facts]
 
-5. **Closing Appeal** (1 minute)
-   - Emotional appeal
-   - Justice requires conviction
-   - Final powerful line
+5. Final Appeal
+   - [Justice-based closing using case]
 
 **DEFENSE CLOSING:**
 
-1. **Opening** (1 minute)
-   - Presumption of innocence reminder
-   - Reasonable doubt standard
-   - Theme reinforcement
+1. Opening Hook
+   - [Reasonable doubt reminder]
 
-2. **Reasonable Doubt** (4-5 minutes)
-   - Element by element: not proven beyond reasonable doubt
-   - Highlight gaps and inconsistencies
-   - Alternative explanations
-   - "The evidence does NOT show..."
+2. Burden Not Met (element by element)
+   - Element 1: [Why not proven beyond reasonable doubt - case gaps]
+   - Element 2: [Why not proven - contradictions/weaknesses]
+   - [Continue for all elements]
 
-3. **Credibility Analysis** (2-3 minutes)
-   - Problems with prosecution witnesses
-   - Defense witnesses are credible
-   - Contradictions in prosecution case
+3. Credibility
+   - Problems with prosecution witnesses: [From case]
+   - Defense evidence is credible: [From case]
 
-4. **Addressing Prosecution Arguments** (2 minutes)
-   - Anticipate main prosecution points
-   - Show insufficient evidence
-   - Emphasize burden of proof
+4. Prosecution Rebuttal
+   - [Address prosecution arguments using case facts]
 
-5. **Closing Appeal** (1 minute)
-   - Reasonable doubt exists
-   - Must acquit / find for defendant
-   - Final powerful line
+5. Final Appeal
+   - [Reasonable doubt exists - must acquit]
 
-For each section, provide:
-- Specific language suggestions
-- Key evidence to cite
-- Rhetorical techniques
-- Emotional appeals
-- Delivery notes
+All arguments must cite specific case evidence.
 
-Case Content:
-{case_text_processed}"""
+===CASE PACKET===
+{case_text_processed}
+===END===
+
+Use only case facts."""
         }
         
-        with st.spinner("🤔 Conducting deep analysis..."):
-            # Use 2200 tokens for detailed analyses - FIXED TRUNCATION
+        with st.spinner("🤔 Analyzing case (15-25 seconds)..."):
             if analysis_type in ["Full Case Analysis", "Key Facts Only", "Prosecution Arguments", "Defense Arguments"]:
-                max_tokens_to_use = 2200  # Increased to prevent truncation
+                max_tokens_to_use = 2400
             else:
-                max_tokens_to_use = 1600
+                max_tokens_to_use = 1800
             
             result, tokens = call_openai(
                 base_system, 
                 prompts[analysis_type],
                 max_tokens=max_tokens_to_use,
-                temperature=0.35
+                temperature=0.25  # Very low for maximum accuracy
             )
             
             if result:
                 cost = estimate_cost(tokens)
                 st.session_state.total_cost += cost
-                st.session_state.daily_analyses += 1
                 
                 st.success("✅ Analysis Complete!")
                 st.markdown("---")
                 st.markdown("### 📊 Results")
                 st.markdown(result)
                 
-                # Download button
                 st.download_button(
                     "📥 Download Analysis",
                     data=result,
@@ -745,8 +690,7 @@ Case Content:
                     mime="text/plain"
                 )
                 
-                # Cost display
-                st.markdown(f'<p class="cost-display">Analysis cost: ${cost:.4f}</p>', unsafe_allow_html=True)
+                st.markdown(f'<p class="cost-display">Cost: ${cost:.4f}</p>', unsafe_allow_html=True)
 
 # ==========================================
 # MODE 2: CROSS-EXAMINATION SIMULATOR
@@ -795,8 +739,8 @@ else:
                 st.error("⚠️ Please enter witness name")
             else:
                 with st.spinner("🔍 Processing case..."):
-                    case_text_cleaned = preprocess_case(case_text)
-                    if len(case_text_cleaned) > 10000:
+                    case_text_cleaned = aggressive_preprocess(case_text)
+                    if len(case_text_cleaned) > 12000:
                         case_text_processed = smart_summarize_case(case_text_cleaned)
                     else:
                         case_text_processed = case_text_cleaned
@@ -807,26 +751,24 @@ else:
                 st.session_state.cross_exam_mode = True
                 st.session_state.conversation_history = []
                 
-                with st.spinner("🧠 AI preparing witness..."):
-                    setup_prompt = f"""You are {witness_name} from this case.
+                with st.spinner("🧠 Preparing witness simulation..."):
+                    setup_prompt = f"""You are simulating {witness_name}, a WITNESS in this mock trial case.
 
-CRITICAL: You are a WITNESS IN THE CASE, not anyone else.
+CRITICAL RULES:
+1. You are a WITNESS - not a judge, not a case creator, not anyone else
+2. Answer ONLY based on {witness_name}'s witness statement in the case below
+3. Stay 100% consistent with what {witness_name} said in their testimony
+4. If asked about something {witness_name} wouldn't know: "I don't know" or "I don't recall"
+5. For improper questions: "OBJECTION: [specific procedural reason]"
+6. Do NOT invent facts not in {witness_name}'s testimony
 
-Study YOUR witness statement in the case content below.
+Examination type: {exam_type}
 
-Rules:
-1. Answer ONLY based on YOUR witness statement
-2. Stay 100% consistent with facts in YOUR testimony
-3. Do not invent facts
-4. If asked something you don't know: "I don't recall"
-5. For improper questions: "OBJECTION: [reason]"
-
-Exam type: {exam_type}
-
-Case Content:
+===CASE CONTENT===
 {case_text_processed}
+===END CASE===
 
-You are {witness_name}, a witness in this case."""
+You are {witness_name}. Respond only based on what {witness_name} testified to in the case above."""
                     
                     st.session_state.witness_context = setup_prompt
                 
@@ -856,7 +798,7 @@ You are {witness_name}, a witness in this case."""
         with col1:
             if st.button("📤 Ask Question") and user_question:
                 with st.spinner("🤔 Witness responding..."):
-                    recent_history = st.session_state.conversation_history[-4:]
+                    recent_history = st.session_state.conversation_history[-3:]  # Last 3 only
                     conversation = "\n".join([
                         f"Q: {ex['question']}\nA: {ex['answer']}"
                         for ex in recent_history
@@ -864,23 +806,24 @@ You are {witness_name}, a witness in this case."""
                     
                     full_prompt = f"""{st.session_state.witness_context}
 
-Previous exchange:
+Previous questions:
 {conversation}
 
 New question: {user_question}
 
-Respond as {st.session_state.witness_name} (a witness).
-- If improper: "OBJECTION: [reason]"
-- If proper: Answer based ONLY on your witness statement
-- Do not invent facts"""
+Respond as {st.session_state.witness_name}:
+- If improper question: "OBJECTION: [reason]"
+- If proper: Answer based ONLY on {st.session_state.witness_name}'s testimony in the case
+- Stay in character
+- Do NOT invent facts"""
                     
-                    system_msg = f"You are {st.session_state.witness_name}, a WITNESS in this case. Answer based ONLY on your testimony. Object to improper questions."
+                    system_msg = f"You are {st.session_state.witness_name}, a witness in this case. Answer ONLY based on what {st.session_state.witness_name} testified to. Do not invent information. Object to improper questions."
                     
                     answer, tokens = call_openai(
                         system_msg, 
                         full_prompt, 
-                        max_tokens=150,
-                        temperature=0.4
+                        max_tokens=180,
+                        temperature=0.3  # Low temp for witness consistency
                     )
                     
                     if answer:
@@ -894,7 +837,7 @@ Respond as {st.session_state.witness_name} (a witness).
                         st.rerun()
         
         with col2:
-            if st.button("🔄 End & Restart"):
+            if st.button("🔄 End"):
                 st.session_state.cross_exam_mode = False
                 st.session_state.conversation_history = []
                 st.rerun()
@@ -904,21 +847,23 @@ Respond as {st.session_state.witness_name} (a witness).
         with st.expander("💡 Examination Tips"):
             if "Cross" in st.session_state.exam_type:
                 st.markdown("""
-                **Cross-Examination:**
-                - Leading questions (suggest the answer)
+                **Cross-Examination Rules:**
+                - Use leading questions (suggest the answer)
                 - One fact per question
                 - Control the witness
                 
-                **Example:** "You were 50 feet away, correct?" ✅
+                ✅ Good: "You were 50 feet away, correct?"
+                ❌ Bad: "How far away were you?"
                 """)
             else:
                 st.markdown("""
-                **Direct Examination:**
-                - Open-ended questions
+                **Direct Examination Rules:**
+                - Use open-ended questions
                 - Let witness tell their story
                 - No leading questions
                 
-                **Example:** "What did you observe?" ✅
+                ✅ Good: "What did you observe?"
+                ❌ Bad: "You saw the defendant, didn't you?"
                 """)
 
 # ==========================================
@@ -927,9 +872,9 @@ Respond as {st.session_state.witness_name} (a witness).
 
 st.markdown("---")
 st.caption("""
-**About:** AI-powered mock trial preparation tool built to democratize access to case analysis.
+**About:** AI-powered mock trial preparation tool. The AI analyzes only facts explicitly stated in your case packet.
 
-**Disclaimer:** AI-generated analysis may contain errors. Always verify facts and apply your own legal reasoning.
+**Disclaimer:** AI-generated analysis may contain errors. Always verify information and use your own legal reasoning.
 
-*Python • Streamlit • OpenAI GPT-3.5*
+*Python • Streamlit • OpenAI GPT-3.5 • Built by Vihaan Paka-Hegde*
 """)
