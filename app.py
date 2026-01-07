@@ -2,6 +2,7 @@ import streamlit as st
 import openai
 import PyPDF2
 import io
+import datetime
 
 # ==========================================
 # PAGE CONFIGURATION
@@ -110,7 +111,7 @@ def smart_summarize_case(case_text):
     """
     Intelligently condense case while preserving ALL critical details.
     """
-    if len(case_text) <= 18000:  # Increased from 15000
+    if len(case_text) <= 18000:
         return case_text
     
     summary_prompt = f"""Extract case content, preserving ALL critical details.
@@ -145,7 +146,7 @@ Provide detailed case content:"""
                 {"role": "user", "content": summary_prompt}
             ],
             temperature=0.2,
-            max_tokens=5000  # Increased for more detail
+            max_tokens=5000
         )
         return response.choices[0].message.content
     except:
@@ -155,10 +156,11 @@ def estimate_cost(tokens):
     """Calculate estimated API cost"""
     return (tokens / 1000) * 0.00175
 
-def call_openai(system_prompt, user_prompt, max_tokens=1800, temperature=0.3):
+def call_openai(system_prompt, user_prompt, max_tokens=2200, temperature=0.35):
     """
-    Make OpenAI API call.
-    Increased max_tokens to 1800 for fuller analysis while staying under 2 cents.
+    Make OpenAI API call with better completion handling.
+    Increased to 2200 tokens - still under 2 cents.
+    Detects and handles truncation.
     """
     try:
         response = openai.chat.completions.create(
@@ -172,7 +174,16 @@ def call_openai(system_prompt, user_prompt, max_tokens=1800, temperature=0.3):
             presence_penalty=0.1,
             frequency_penalty=0.0
         )
-        return response.choices[0].message.content, response.usage.total_tokens
+        
+        # Check if response was truncated
+        finish_reason = response.choices[0].finish_reason
+        content = response.choices[0].message.content
+        
+        # If truncated, add notice
+        if finish_reason == "length":
+            content += "\n\n---\n⚠️ *Analysis truncated due to length. Consider analyzing specific sections (like 'Prosecution Arguments' or 'Key Facts Only') separately for complete detail.*"
+        
+        return content, response.usage.total_tokens
     except Exception as e:
         st.error(f"API Error: {str(e)}")
         return None, 0
@@ -191,6 +202,15 @@ if 'witness_name' not in st.session_state:
     st.session_state.witness_name = ""
 if 'total_cost' not in st.session_state:
     st.session_state.total_cost = 0.0
+if 'daily_analyses' not in st.session_state:
+    st.session_state.daily_analyses = 0
+if 'last_reset' not in st.session_state:
+    st.session_state.last_reset = datetime.date.today()
+
+# Reset daily counter
+if st.session_state.last_reset != datetime.date.today():
+    st.session_state.daily_analyses = 0
+    st.session_state.last_reset = datetime.date.today()
 
 # ==========================================
 # HEADER
@@ -287,6 +307,11 @@ if mode == "Case Analysis":
             st.error("⚠️ Please enter witness name")
             st.stop()
         
+        # Check daily limit (optional - comment out if you don't want limits)
+        # if st.session_state.daily_analyses >= 100:
+        #     st.error("⚠️ Daily usage limit reached. Please try again tomorrow.")
+        #     st.stop()
+        
         with st.spinner("🔍 Processing case packet..."):
             case_text_cleaned = preprocess_case(case_text)
             
@@ -316,7 +341,7 @@ FORBIDDEN:
 
 You provide comprehensive, strategic analysis for competitive mock trial preparation."""
 
-        # IMPROVED PROMPTS - More specific, demanding deeper analysis
+        # IMPROVED PROMPTS
         prompts = {
             "Full Case Analysis": f"""Provide a COMPREHENSIVE strategic analysis of this case.
 
@@ -689,22 +714,23 @@ Case Content:
         }
         
         with st.spinner("🤔 Conducting deep analysis..."):
-            # Use longer max_tokens for Full Analysis and other detailed requests
+            # Use 2200 tokens for detailed analyses - FIXED TRUNCATION
             if analysis_type in ["Full Case Analysis", "Key Facts Only", "Prosecution Arguments", "Defense Arguments"]:
-                max_tokens_to_use = 1800
+                max_tokens_to_use = 2200  # Increased to prevent truncation
             else:
-                max_tokens_to_use = 1400
+                max_tokens_to_use = 1600
             
             result, tokens = call_openai(
                 base_system, 
                 prompts[analysis_type],
                 max_tokens=max_tokens_to_use,
-                temperature=0.35  # Slightly higher for more natural writing
+                temperature=0.35
             )
             
             if result:
                 cost = estimate_cost(tokens)
                 st.session_state.total_cost += cost
+                st.session_state.daily_analyses += 1
                 
                 st.success("✅ Analysis Complete!")
                 st.markdown("---")
