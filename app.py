@@ -315,7 +315,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("**💡 Tips**")
     if mode == "Case Analysis":
-        st.info("The AI analyzes ONLY facts explicitly stated in your case packet.")
+        st.info("The AI analyzes ONLY facts explicitly stated in your case packet. Cross-Examination Simulator and Objection Practice modes are still being developed")
     elif mode == "Cross-Examination Simulator":
         st.info("AI simulates a witness based strictly on their testimony.")
     else:
