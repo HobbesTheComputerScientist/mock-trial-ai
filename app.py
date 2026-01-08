@@ -144,13 +144,11 @@ def aggressive_preprocess(case_text):
 def smart_summarize_case(case_text):
     """
     Use AI to condense while preserving ALL legal content.
-    COMPLETELY FIXED: Uses 3500 max_tokens (well under 4096 limit)
+    FIXED: Uses 3500 max_tokens (well under 4096 limit)
     """
-    # If already short enough, return as-is (NO API CALL = NO ERROR)
     if len(case_text) <= 16000:
         return case_text
     
-    # Only summarize if truly necessary
     summary_prompt = f"""Extract ONLY legal case content from this document.
 
 RULES:
@@ -174,11 +172,10 @@ Case content only:"""
                 {"role": "user", "content": summary_prompt}
             ],
             temperature=0.1,
-            max_tokens=3500  # FIXED: Was 6000, now 3500 (safely under 4096)
+            max_tokens=3500
         )
         return response.choices[0].message.content
     except Exception as e:
-        # If summarization fails, just truncate (NO ERROR MESSAGE)
         return case_text[:16000]
 
 def estimate_cost(tokens):
@@ -239,8 +236,10 @@ if 'objection_case_text' not in st.session_state:
     st.session_state.objection_case_text = ""
 if 'objection_witness' not in st.session_state:
     st.session_state.objection_witness = ""
-if 'objection_exam_type' not in st.session_state:
-    st.session_state.objection_exam_type = ""
+if 'saved_objection_exam_type' not in st.session_state:  # FIXED: Changed name
+    st.session_state.saved_objection_exam_type = ""
+if 'show_result' not in st.session_state:
+    st.session_state.show_result = False
 
 # ==========================================
 # HEADER
@@ -339,7 +338,6 @@ if mode == "Case Analysis":
         with st.spinner("🔍 Processing case packet..."):
             case_text_cleaned = aggressive_preprocess(case_text)
             
-            # FIXED: Increased threshold to 16000 to avoid unnecessary summarization
             if len(case_text_cleaned) > 16000:
                 case_text_processed = smart_summarize_case(case_text_cleaned)
             else:
@@ -354,54 +352,26 @@ ABSOLUTE RULES:
 4. WHEN UNCERTAIN: State "This is not specified in the case packet"
 5. ACCURACY OVER COMPLETENESS
 
-STYLISTIC GUIDELINES (inspired by championship mock trial performances):
-- Use powerful, memorable phrasing for key points
-- Create narrative themes that tie facts together
-- Identify "story arcs" within the case
-- Suggest compelling metaphors that fit the case facts
-- Highlight emotional resonance of key facts
-- Frame arguments with rhetorical techniques (rule of three, contrasts, repetition)
+STYLISTIC GUIDELINES:
+- Use powerful, memorable phrasing
+- Create narrative themes
+- Suggest compelling metaphors from case facts
+- Highlight emotional resonance
+- Frame arguments with rhetorical techniques
 
-Your analysis must be 100% grounded in the case packet provided, but presented with championship-level strategic insight."""
+Your analysis must be 100% grounded in the case packet provided."""
 
         prompts = {
             "Full Case Analysis": f"""Analyze this case using ONLY information explicitly stated below.
 
 **1. CASE OVERVIEW & THEME**
-- Parties, charges, key dates
-- **NARRATIVE THEME**: Compelling story (1-2 sentences)
-- **CASE TAGLINE**: Memorable phrase
-
 **2. CRITICAL FACTS (18-20 facts)**
-For each: fact with quotes, legal significance, strategic value, source, emotional impact, catchphrase opportunity
-
 **3. LEGAL ELEMENTS & BURDEN**
-- What must be proven
-- Strength assessment for each element
-
 **4. PROSECUTION/PLAINTIFF STRATEGY**
-- Core theory, theme statement
-- 3 strongest arguments with evidence
-- Power phrases (3-5 memorable lines)
-
 **5. DEFENSE STRATEGY**
-- Core theory, theme statement
-- 3 strongest arguments with evidence
-- Power phrases (3-5 memorable lines)
-
 **6. WITNESS BREAKDOWN**
-For each: role, credibility assessment, key testimony with quotes, contradictions, examination strategy, memorable characterization
-
 **7. EVIDENCE & EXHIBITS**
-- Key exhibits and what they prove
-- Timeline reconstruction
-- Visual opportunities
-
 **8. STRATEGIC ROADMAP**
-- Opening hook ideas (3 approaches)
-- Closing themes (2-3 alternatives)
-- Zingers (5-7 powerful one-liners from case facts)
-- Winning moments
 
 ===CASE PACKET===
 {case_text_processed}
@@ -409,33 +379,13 @@ For each: role, credibility assessment, key testimony with quotes, contradiction
 
 Championship-level analysis using only case facts.""",
 
-            "Key Facts Only": f"""Extract 20 most legally significant facts.
-
-**FACT #X: [Dramatic phrasing]**
-- Quote: "[Exact quote]"
-- Source: [Witness/exhibit]
-- Legal significance
-- Strategic value
-- Power phrase
-- Juror appeal
-
-Prioritize: disputed facts, contradictions, timeline issues, credibility indicators, smoking guns, emotional resonance.
+            "Key Facts Only": f"""Extract 20 most legally significant facts with strategic framing.
 
 ===CASE PACKET===
 {case_text_processed}
-===END===
+===END===""",
 
-20 strategic facts.""",
-
-            "Legal Issues": f"""Identify key legal issues.
-
-**ISSUE #X:**
-- Elements to prove
-- Burden of proof
-- Evidence for each side with strength
-- Battleground analysis
-- Winning approach
-- Catchphrase
+            "Legal Issues": f"""Identify key legal issues with championship depth.
 
 ===CASE PACKET===
 {case_text_processed}
@@ -443,27 +393,11 @@ Prioritize: disputed facts, contradictions, timeline issues, credibility indicat
 
             "Prosecution Arguments": f"""Develop 5 championship prosecution arguments.
 
-**ARGUMENT #X: [Title]**
-- Theme statement
-- Evidence chain with quotes
-- Why this wins
-- Power phrases (3-5 lines)
-- Defense counter & response
-- Closing moment
-
 ===CASE PACKET===
 {case_text_processed}
 ===END===""",
 
             "Defense Arguments": f"""Develop 5 championship defense arguments.
-
-**ARGUMENT #X: [Title]**
-- Theme statement
-- Evidence chain with quotes
-- Why this creates reasonable doubt
-- Power phrases (3-5 lines)
-- Prosecution counter & response
-- Closing moment
 
 ===CASE PACKET===
 {case_text_processed}
@@ -471,76 +405,17 @@ Prioritize: disputed facts, contradictions, timeline issues, credibility indicat
 
             "Witness Questions": f"""Generate championship examination questions for: {witness_name_input}
 
-**WITNESS PROFILE**
-- Role, credibility, bias, one-line characterization
-
-**DIRECT EXAMINATION (12 questions)**
-- Foundation (2-3)
-- Key facts (6-7)
-- Credibility building (2-3)
-[For each: purpose, follow-up, emotional moment]
-
-**CROSS-EXAMINATION (12 questions)**
-- Control & commitment (2-3)
-- Impeachment (7-8)
-- Final blow (2-3)
-[For each: goal, expected answer, impeachment setup, resistance plan]
-
-**POWER MOVES**
-- Impeachment opportunities
-- Zingers
-- Silence moments
-- Exhibits to use
-
-If {witness_name_input} is NOT a witness: State so.
-
 ===CASE PACKET===
 {case_text_processed}
 ===END===""",
 
             "Opening Statement Ideas": f"""Draft championship opening frameworks.
 
-**PROSECUTION/PLAINTIFF:**
-1. Hook (3 alternatives: dramatic quote, rhetorical question, vivid scene)
-2. Theme statement (1 sentence to repeat)
-3. Story (chronological with emotional beats, power phrases, repetition device)
-4. What we will prove (element by element)
-5. Closing line (3 alternatives)
-
-**DEFENSE:**
-1. Hook (3 alternatives)
-2. Theme statement (reasonable doubt)
-3. Defense story
-4. What prosecution must prove
-5. Closing line (3 alternatives)
-
-Championship techniques: rule of three, present tense, rhetorical questions, contrasts, repetition, silence.
-
 ===CASE PACKET===
 {case_text_processed}
 ===END===""",
 
             "Closing Statement Ideas": f"""Draft championship closing frameworks.
-
-**PROSECUTION/PLAINTIFF:**
-1. Opening hook (3 alternatives, return to theme)
-2. "Here's what happened" (dramatic retelling)
-3. Elements proven (each with evidence, power phrases)
-4. Credibility (why ours are credible, theirs aren't)
-5. Addressing defense (anticipate and dismantle)
-6. The stakes (why this matters)
-7. Final appeal (mic drop moment)
-
-**DEFENSE:**
-1. Opening hook (presumption of innocence)
-2. "Here's what they cannot prove"
-3. Reasonable doubt (each element, why not proven)
-4. Credibility (their problems, our credibility)
-5. Addressing prosecution (pre-emptive dismantling)
-6. The stakes (innocence protection)
-7. Final appeal (powerful final line)
-
-Championship techniques, power phrases bank (10-15 from case).
 
 ===CASE PACKET===
 {case_text_processed}
@@ -699,11 +574,9 @@ Previous:
 
 New question: {user_question}
 
-Respond as {st.session_state.witness_name}:
-- If improper: "OBJECTION: [reason]"
-- If proper: Answer based ONLY on testimony"""
+Respond as {st.session_state.witness_name}."""
                     
-                    system_msg = f"You are {st.session_state.witness_name}, a witness. Answer ONLY based on testimony. Object to improper questions."
+                    system_msg = f"You are {st.session_state.witness_name}, a witness. Answer ONLY based on testimony."
                     
                     answer, tokens = call_openai(
                         system_msg, 
@@ -727,24 +600,15 @@ Respond as {st.session_state.witness_name}:
                 with st.spinner("🎓 Analyzing..."):
                     questions_only = [ex['question'] for ex in st.session_state.conversation_history]
                     
-                    feedback_prompt = f"""You are a championship mock trial coach. Provide feedback on this {st.session_state.exam_type.split()[0]} examination.
+                    feedback_prompt = f"""Provide feedback on this {st.session_state.exam_type.split()[0]} examination.
 
 TRANSCRIPT:
 {chr(10).join([f"Q{i+1}: {q}" for i, q in enumerate(questions_only)])}
 
-PROVIDE:
-**OVERALL ASSESSMENT**
-**STRENGTHS** (2-3 specific)
-**AREAS FOR IMPROVEMENT** (3-4 with examples and fixes)
-**QUESTION-BY-QUESTION NOTES**
-**RULES FOLLOWED/VIOLATED**
-**CHAMPIONSHIP TIPS**
-**SUGGESTED QUESTIONS TO ADD** (3-5)
-
-Be specific, actionable."""
+Provide: overall assessment, strengths, improvements, question-by-question notes, rules followed/violated, championship tips, suggested questions."""
 
                     feedback, tokens = call_openai(
-                        "You are an expert mock trial coach. Provide constructive feedback.",
+                        "You are an expert mock trial coach.",
                         feedback_prompt,
                         max_tokens=1200,
                         temperature=0.3
@@ -781,7 +645,7 @@ Be specific, actionable."""
         st.markdown(f'<p class="cost-display">Session: ${st.session_state.total_cost:.4f}</p>', unsafe_allow_html=True)
 
 # ==========================================
-# MODE 3: OBJECTION PRACTICE (NEW)
+# MODE 3: OBJECTION PRACTICE
 # ==========================================
 
 else:  # Objection Practice
@@ -817,10 +681,10 @@ else:  # Objection Practice
         )
         
         st.markdown("**Step 3: Choose examination type**")
-        exam_type = st.radio(
+        exam_type_input = st.radio(  # FIXED: Changed variable name
             "Type of examination:",
             ["Direct Examination", "Cross-Examination"],
-            key="objection_exam_type"
+            key="exam_type_radio"  # FIXED: Different key
         )
         
         if st.button("🎯 Start Objection Practice", type="primary"):
@@ -838,15 +702,16 @@ else:  # Objection Practice
                 
                 st.session_state.objection_case_text = case_text_processed
                 st.session_state.objection_witness = witness_name
-                st.session_state.objection_exam_type = exam_type
+                st.session_state.saved_objection_exam_type = exam_type_input  # FIXED: Save to different variable
                 st.session_state.objection_mode = True
                 st.session_state.objection_history = []
                 st.session_state.current_question = None
+                st.session_state.show_result = False
                 
                 st.rerun()
     
     else:
-        st.success(f"🎯 **Practicing Objections - {st.session_state.objection_exam_type} of {st.session_state.objection_witness}**")
+        st.success(f"🎯 **Practicing Objections - {st.session_state.saved_objection_exam_type} of {st.session_state.objection_witness}**")
         
         # Display score
         if len(st.session_state.objection_history) > 0:
@@ -864,36 +729,29 @@ else:  # Objection Practice
             
             st.markdown("---")
         
-        # Generate or display current question
-        if st.session_state.current_question is None:
+        # Generate new question if needed
+        if st.session_state.current_question is None and not st.session_state.show_result:
             with st.spinner("🤔 Generating practice question..."):
-                question_prompt = f"""You are generating a mock trial examination question for objection practice.
+                question_prompt = f"""Generate ONE realistic examination question for objection practice.
 
 Witness: {st.session_state.objection_witness}
-Examination type: {st.session_state.objection_exam_type}
+Examination type: {st.session_state.saved_objection_exam_type}
 
 Case context:
 {st.session_state.objection_case_text[:3000]}
 
-Generate ONE realistic examination question that is either:
-- Proper (no objection needed), OR
-- Improper (objection should be made)
-
-For {st.session_state.objection_exam_type}:
-{"- Improper questions: leading, assumes facts not in evidence, compound, argumentative" if st.session_state.objection_exam_type == "Direct Examination" else "- Improper questions: non-leading, compound, argumentative, asked and answered, speculation"}
+Generate a question that is either PROPER or IMPROPER for this examination type.
 
 Output format:
 QUESTION: [the actual question]
 RULING: [PROPER or IMPROPER]
-REASON: [If improper, what objection applies. If proper, why it's acceptable]
-EXPLANATION: [Brief explanation of why this is proper/improper for this examination type]
+REASON: [If improper, what objection. If proper, why acceptable]
+EXPLANATION: [Brief explanation]
 
-Generate a realistic question based on the case."""
+Generate realistic question based on case."""
 
-                system_msg = "You are a mock trial judge creating practice questions. Generate realistic, educational questions."
-                
                 response, tokens = call_openai(
-                    system_msg,
+                    "You are a mock trial judge creating practice questions.",
                     question_prompt,
                     max_tokens=300,
                     temperature=0.7
@@ -905,9 +763,9 @@ Generate a realistic question based on the case."""
                     st.session_state.current_question = response
                     st.rerun()
         
-        # Display current question
-        if st.session_state.current_question:
-            # Parse the response
+        # Display current question and handle responses
+        if st.session_state.current_question and not st.session_state.show_result:
+            # Parse response
             lines = st.session_state.current_question.split('\n')
             question_text = ""
             ruling = ""
@@ -931,7 +789,7 @@ Generate a realistic question based on the case."""
             col1, col2 = st.columns(2)
             
             with col1:
-                if st.button("✅ No Objection (Proper Question)", use_container_width=True):
+                if st.button("✅ No Objection (Proper)", use_container_width=True, key="btn_proper"):
                     user_answer = "PROPER"
                     correct = (user_answer == ruling)
                     
@@ -944,28 +802,11 @@ Generate a realistic question based on the case."""
                         'explanation': explanation
                     })
                     
-                    if correct:
-                        st.markdown('<div class="correct-answer">', unsafe_allow_html=True)
-                        st.markdown("### ✅ Correct!")
-                        st.markdown(f"**This question is PROPER.**")
-                        st.markdown(f"**Why:** {reason}")
-                        st.markdown(f"**Explanation:** {explanation}")
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    else:
-                        st.markdown('<div class="incorrect-answer">', unsafe_allow_html=True)
-                        st.markdown("### ❌ Incorrect")
-                        st.markdown(f"**This question is IMPROPER.**")
-                        st.markdown(f"**Objection:** {reason}")
-                        st.markdown(f"**Explanation:** {explanation}")
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    st.session_state.current_question = None
-                    
-                    if st.button("➡️ Next Question"):
-                        st.rerun()
+                    st.session_state.show_result = True
+                    st.rerun()
             
             with col2:
-                if st.button("🚫 OBJECTION! (Improper Question)", use_container_width=True):
+                if st.button("🚫 OBJECTION! (Improper)", use_container_width=True, key="btn_improper"):
                     user_answer = "IMPROPER"
                     correct = (user_answer == ruling)
                     
@@ -978,40 +819,49 @@ Generate a realistic question based on the case."""
                         'explanation': explanation
                     })
                     
-                    if correct:
-                        st.markdown('<div class="correct-answer">', unsafe_allow_html=True)
-                        st.markdown("### ✅ Correct!")
-                        st.markdown(f"**Objection sustained!**")
-                        st.markdown(f"**Objection:** {reason}")
-                        st.markdown(f"**Explanation:** {explanation}")
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    else:
-                        st.markdown('<div class="incorrect-answer">', unsafe_allow_html=True)
-                        st.markdown("### ❌ Incorrect")
-                        st.markdown(f"**Objection overruled. This question is PROPER.**")
-                        st.markdown(f"**Why it's proper:** {reason}")
-                        st.markdown(f"**Explanation:** {explanation}")
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    st.session_state.current_question = None
-                    
-                    if st.button("➡️ Next Question"):
-                        st.rerun()
+                    st.session_state.show_result = True
+                    st.rerun()
+        
+        # Show result if answer was given
+        if st.session_state.show_result and len(st.session_state.objection_history) > 0:
+            last_item = st.session_state.objection_history[-1]
+            
+            if last_item['correct']:
+                st.markdown('<div class="correct-answer">', unsafe_allow_html=True)
+                st.markdown("### ✅ Correct!")
+                if last_item['correct_answer'] == "PROPER":
+                    st.markdown("**This question is PROPER.**")
+                else:
+                    st.markdown("**Objection sustained!**")
+                st.markdown(f"**Reason:** {last_item['reason']}")
+                st.markdown(f"**Explanation:** {last_item['explanation']}")
+                st.markdown('</div>', unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="incorrect-answer">', unsafe_allow_html=True)
+                st.markdown("### ❌ Incorrect")
+                if last_item['correct_answer'] == "PROPER":
+                    st.markdown("**Objection overruled. This question is PROPER.**")
+                else:
+                    st.markdown("**You should have objected! This question is IMPROPER.**")
+                st.markdown(f"**Reason:** {last_item['reason']}")
+                st.markdown(f"**Explanation:** {last_item['explanation']}")
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            if st.button("➡️ Next Question", key="btn_next"):
+                st.session_state.current_question = None
+                st.session_state.show_result = False
+                st.rerun()
         
         st.markdown("---")
         
         col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            if st.button("🔄 Get New Question"):
-                st.session_state.current_question = None
-                st.rerun()
         
         with col2:
             if st.button("🏁 End Practice"):
                 st.session_state.objection_mode = False
                 st.session_state.objection_history = []
                 st.session_state.current_question = None
+                st.session_state.show_result = False
                 st.rerun()
         
         # Show history
