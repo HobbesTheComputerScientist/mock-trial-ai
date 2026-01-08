@@ -36,6 +36,13 @@ st.markdown("""
         font-size: 0.85rem;
         font-style: italic;
     }
+    .feedback-section {
+        background-color: #f0f8ff;
+        padding: 1.5rem;
+        border-radius: 10px;
+        border-left: 4px solid #0066cc;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -83,7 +90,6 @@ def extract_text_from_pdf(pdf_file):
 def aggressive_preprocess(case_text):
     """
     Aggressively remove ALL meta-information before sending to AI.
-    This is the #1 defense against hallucination.
     """
     meta_patterns = [
         "in honor of", "dedicated to", "in memory of", "this case honors",
@@ -124,11 +130,12 @@ def aggressive_preprocess(case_text):
 def smart_summarize_case(case_text):
     """
     Use AI to condense while preserving ALL legal content.
+    FIXED: max_tokens reduced to 3800 (under 4096 limit)
     """
-    if len(case_text) <= 20000:
+    if len(case_text) <= 18000:
         return case_text
     
-    summary_prompt = f"""You are extracting ONLY the legal case content from this document.
+    summary_prompt = f"""Extract ONLY legal case content from this document.
 
 RULES:
 1. INCLUDE all charges, parties, witnesses, dates, locations, events, evidence, testimony
@@ -136,10 +143,10 @@ RULES:
 3. KEEP all contradictions and disputed facts
 4. EXCLUDE dedications, author info, competition rules, instructions
 
-Output ONLY the case facts. No preamble.
+Output ONLY case facts. No preamble.
 
 Document:
-{case_text[:20000]}
+{case_text[:18000]}
 
 Case content only:"""
 
@@ -151,20 +158,22 @@ Case content only:"""
                 {"role": "user", "content": summary_prompt}
             ],
             temperature=0.1,
-            max_tokens=6000
+            max_tokens=3800  # FIXED: Was 6000, now 3800 (under 4096 limit)
         )
         return response.choices[0].message.content
     except Exception as e:
         st.warning(f"Summarization skipped: {str(e)}")
-        return case_text[:20000]
+        return case_text[:18000]
 
 def estimate_cost(tokens):
     """Calculate estimated API cost"""
     return (tokens / 1000) * 0.00175
 
-def call_openai(system_prompt, user_prompt, max_tokens=2400, temperature=0.25):
+def call_openai(system_prompt, user_prompt, max_tokens=2600, temperature=0.2):
     """
-    Make OpenAI API call with maximum hallucination prevention.
+    Make OpenAI API call with enhanced analysis capabilities.
+    Increased max_tokens to 2600 for richer analysis while staying under 1.5 cents
+    Reduced temperature to 0.2 for even more accuracy
     """
     try:
         response = client.chat.completions.create(
@@ -204,6 +213,8 @@ if 'witness_name' not in st.session_state:
     st.session_state.witness_name = ""
 if 'total_cost' not in st.session_state:
     st.session_state.total_cost = 0.0
+if 'exam_type' not in st.session_state:
+    st.session_state.exam_type = ""
 
 # ==========================================
 # HEADER
@@ -300,226 +311,488 @@ if mode == "Case Analysis":
         with st.spinner("🔍 Processing and cleaning case packet..."):
             case_text_cleaned = aggressive_preprocess(case_text)
             
-            if len(case_text_cleaned) > 20000:
+            if len(case_text_cleaned) > 18000:
                 st.info("📋 Condensing lengthy case while preserving all facts...")
                 case_text_processed = smart_summarize_case(case_text_cleaned)
             else:
                 case_text_processed = case_text_cleaned
         
-        base_system = """You are an expert Mock Trial coach. You analyze ONLY what is explicitly written in the case packet.
+        # ENHANCED SYSTEM PROMPT with mock trial competition knowledge
+        base_system = """You are an expert Mock Trial coach who has studied national championship performances. You analyze ONLY what is explicitly written in the case packet.
 
 ABSOLUTE RULES:
-
 1. ONLY STATE FACTS EXPLICITLY WRITTEN IN THE CASE PACKET
 2. NEVER INVENT OR ASSUME
 3. DISTINGUISH META-INFO FROM CASE CONTENT
 4. WHEN UNCERTAIN: State "This is not specified in the case packet"
 5. ACCURACY OVER COMPLETENESS
 
-Your analysis must be 100% grounded in the case packet provided."""
+STYLISTIC GUIDELINES (inspired by championship mock trial performances):
+- Use powerful, memorable phrasing for key points
+- Create narrative themes that tie facts together
+- Identify "story arcs" within the case
+- Suggest compelling metaphors that fit the case facts
+- Highlight emotional resonance of key facts
+- Frame arguments with rhetorical techniques (rule of three, contrasts, repetition)
 
+Your analysis must be 100% grounded in the case packet provided, but presented with championship-level strategic insight."""
+
+        # ENHANCED PROMPTS with better catchphrase and strategic depth
         prompts = {
-            "Full Case Analysis": f"""Analyze this case using ONLY information explicitly stated below.
+            "Full Case Analysis": f"""Analyze this case using ONLY information explicitly stated below. Provide championship-level strategic insights.
 
 PROVIDE:
 
-**1. CASE OVERVIEW**
+**1. CASE OVERVIEW & THEME**
 - Parties and charges
-- Key dates and locations
+- Key dates and locations  
+- **NARRATIVE THEME**: What's the compelling story here? (1-2 sentence theme that ties everything together)
+- **CASE TAGLINE**: A memorable phrase that captures this case (like "Justice delayed is justice denied" or "Actions speak louder than words")
 
-**2. CRITICAL FACTS (15-20 facts)**
+**2. CRITICAL FACTS (18-20 facts)**
 For each fact:
-- State the fact with exact details
-- Quote source if from testimony
-- Explain legal significance
-- Note which side it helps
-- Cite source
+- State the fact with exact details and quotes
+- Legal significance (which elements it proves/disproves)
+- Strategic value (which side benefits and why)
+- Source (witness name or exhibit number)
+- **Emotional impact**: How this fact resonates with jurors
+- **Catchphrase opportunity**: Memorable way to frame this fact in argument
 
-**3. LEGAL ISSUES**
-- What must be proven?
-- Key legal questions
+**3. LEGAL ELEMENTS & BURDEN**
+- What must be proven beyond reasonable doubt / by preponderance?
+- Each element broken down
+- Strength of evidence for each element (Strong/Moderate/Weak for each side)
 
 **4. PROSECUTION/PLAINTIFF STRATEGY**
-- Theory of the case
-- Strongest arguments
-- How they address weaknesses
+- **Core Theory** (what happened and why)
+- **Theme Statement** (one powerful sentence)
+- 3 strongest arguments with supporting evidence
+- How to overcome weaknesses
+- **Power Phrases**: 3-5 memorable phrases to use in closing
 
 **5. DEFENSE STRATEGY**
-- Theory of the case
-- Strongest arguments
-- How they create doubt
+- **Core Theory** (alternative narrative)
+- **Theme Statement** (one powerful sentence)
+- 3 strongest arguments with supporting evidence  
+- How to exploit prosecution weaknesses
+- **Power Phrases**: 3-5 memorable phrases to use in closing
 
-**6. WITNESS CREDIBILITY**
-For key witnesses:
-- What they claim
-- Credibility strengths/weaknesses
-- Contradictions
+**6. WITNESS-BY-WITNESS BREAKDOWN**
+For each key witness:
+- Role and what they establish
+- Credibility assessment (Strong/Moderate/Weak and why)
+- Key testimony with exact quotes
+- Contradictions or inconsistencies
+- **Examination strategy**: What to emphasize or attack
+- **Memorable characterization**: One-phrase description of this witness
 
-**7. EVIDENCE EVALUATION**
-- Key exhibits
-- Corroboration or contradictions
+**7. EVIDENCE & EXHIBITS**
+- Each key exhibit and what it proves
+- Corroboration or contradiction patterns
+- Timeline reconstruction from evidence
+- **Visual/demonstrative opportunities**: What evidence could be displayed dramatically
 
-**8. STRATEGIC INSIGHTS**
-- Critical points for each side
-- Vulnerabilities to exploit
+**8. STRATEGIC ROADMAP**
+- **Opening hook ideas**: 3 different powerful opening approaches
+- **Closing themes**: 2-3 alternative closing themes
+- **"Ah-ha" moments**: Facts that could create breakthroughs
+- **Zingers**: 5-7 powerful one-liners for key moments (based on case facts)
+- **Vulnerabilities**: What each side must address
+- **Winning moments**: Where can each side create impact?
 
 ===CASE PACKET===
 {case_text_processed}
 ===END===
 
-Analyze using ONLY the information above.""",
+Analyze deeply. Be strategic. Be memorable. Use only case facts.""",
 
-            "Key Facts Only": f"""Extract the 20 most legally significant facts from this case.
+            "Key Facts Only": f"""Extract 20 most legally significant facts. Make each fact MEMORABLE and STRATEGIC.
 
 For EACH fact (numbered 1-20):
 
-**FACT #X: [Specific fact]**
-- Quote: "[Exact quote if applicable]"
-- Source: [Witness name or exhibit]
-- Legal significance: [Why this matters]
-- Strategic value: [Which side this helps]
+**FACT #X: [Specific fact with dramatic phrasing]**
+- **Quote**: "[Exact quote from case]"
+- **Source**: [Witness name or exhibit]
+- **Legal significance**: [Which element this proves/disproves]
+- **Strategic value**: [Which side benefits and how to weaponize this]
+- **Power phrase**: [How to frame this fact memorably in argument]
+- **Juror appeal**: [Why this fact matters emotionally/logically to jurors]
 
-Do not invent facts.
+PRIORITIZE:
+- Disputed facts with contradictions
+- Timeline inconsistencies
+- Credibility indicators
+- "Smoking gun" evidence
+- Facts that create reasonable doubt
+- Facts with emotional resonance
+
+Do not invent facts. Quote case directly.
 
 ===CASE PACKET===
 {case_text_processed}
 ===END===
 
-20 facts with analysis.""",
+20 strategic facts with championship-level framing.""",
 
-            "Legal Issues": f"""Identify key legal issues using ONLY information from this case.
+            "Legal Issues": f"""Identify key legal issues with championship-level depth.
 
 For each issue:
 
 **ISSUE #X: [Legal question]**
-- Elements to prove
-- Evidence for each side
-- Analysis
+- **Elements to prove**: [Specific requirements]
+- **Burden of proof**: [Standard and what it means practically]
+- **Prosecution/Plaintiff evidence**: [Specific facts with strength assessment]
+- **Defense evidence**: [Specific facts with strength assessment]
+- **Battleground**: [Why this issue is contested]
+- **Winning approach**: [How each side should argue this]
+- **Catchphrase**: [Memorable way to frame this issue]
 
-Do not cite legal cases not mentioned.
+Focus on disputed elements where the case will be won or lost.
 
 ===CASE PACKET===
 {case_text_processed}
-===END===""",
+===END===
 
-            "Prosecution Arguments": f"""Develop 5 prosecution/plaintiff arguments using ONLY case facts.
+Strategic legal analysis.""",
+
+            "Prosecution Arguments": f"""Develop 5 championship-caliber prosecution arguments.
 
 For each argument:
 
-**ARGUMENT #X: [Statement]**
+**ARGUMENT #X: [Compelling argument title]**
 
-Evidence:
-- Witness testimony with quotes
-- Physical evidence
-- Additional facts
+**Theme statement**: [One powerful sentence capturing this argument]
 
-Why this is strong
-Defense counter-arguments
-Prosecution response
+**Evidence chain**:
+- Witness testimony: "[Direct quote]" - [Witness]
+- Physical evidence: [Specific exhibit with details]
+- Corroborating facts: [Additional support]
+- **Strength**: [Rate as Strong/Solid/Moderate]
 
-All evidence must be from the case.
+**Why this wins**:
+- Logical reasoning path
+- Emotional appeal to jurors
+- How it proves legal elements
+- Corroboration from multiple sources
+
+**Power phrases** (3-5 memorable lines for this argument):
+1. [Catchphrase based on case facts]
+2. [Rhetorical question based on evidence]
+3. [Repetition for emphasis technique]
+4. [Contrast phrase: "Not X, but Y"]
+5. [Call-to-action conclusion]
+
+**Defense counter & response**:
+- How defense will attack: [Specific counter]
+- Prosecution rebuttal: [How to neutralize]
+- Impeachment opportunities: [Weak defense witnesses to target]
+
+**Closing moment**: [How to dramatically culminate this argument in closing]
+
+All evidence must be from case. Make it championship-worthy.
 
 ===CASE PACKET===
 {case_text_processed}
-===END===""",
+===END===
 
-            "Defense Arguments": f"""Develop 5 defense arguments using ONLY case facts.
+5 powerful prosecution arguments.""",
+
+            "Defense Arguments": f"""Develop 5 championship-caliber defense arguments.
 
 For each argument:
 
-**ARGUMENT #X: [Statement]**
+**ARGUMENT #X: [Compelling argument title]**
 
-Evidence:
-- Witness testimony with quotes
-- Physical evidence
-- Gaps in prosecution case
-- Contradictions
+**Theme statement**: [One powerful sentence capturing this argument]
 
-Why this creates reasonable doubt
-Prosecution counter-arguments
-Defense response
+**Evidence chain**:
+- Witness testimony: "[Direct quote]" - [Witness]
+- Physical evidence: [Specific exhibit with details]
+- Gaps in prosecution case: [What they cannot prove]
+- Contradictions: [Specific inconsistencies]
+- **Strength**: [Rate as Strong/Solid/Moderate]
 
-All evidence must be from the case.
+**Why this creates reasonable doubt**:
+- Logical reasoning path
+- Emotional appeal to jurors
+- How it undermines prosecution elements
+- Alternative explanations
+
+**Power phrases** (3-5 memorable lines for this argument):
+1. [Catchphrase based on case facts]
+2. [Rhetorical question exposing prosecution weakness]
+3. [Reasonable doubt emphasis]
+4. [Contrast: "Prosecution wants you to believe X, but the evidence shows Y"]
+5. [Innocence presumption reminder]
+
+**Prosecution counter & response**:
+- How prosecution will attack: [Specific counter]
+- Defense rebuttal: [How to neutralize]
+- Impeachment opportunities: [Weak prosecution witnesses to target]
+
+**Closing moment**: [How to dramatically culminate this argument in closing]
+
+All evidence must be from case. Make it championship-worthy.
 
 ===CASE PACKET===
 {case_text_processed}
-===END===""",
+===END===
 
-            "Witness Questions": f"""Generate strategic questions for witness: {witness_name_input}
+5 powerful defense arguments.""",
 
-FIRST: Verify {witness_name_input} is actually a WITNESS in this case.
+            "Witness Questions": f"""Generate championship-level examination questions for: {witness_name_input}
 
-**WITNESS ANALYSIS**
-- Role in case
-- Key testimony points
-- Credibility issues
+FIRST: Verify {witness_name_input} is a WITNESS in this case.
 
-**DIRECT EXAMINATION (10 questions)**
-**CROSS-EXAMINATION (10 questions)**
+**WITNESS PROFILE**
+- Role and significance in case
+- Key testimony they provide
+- Credibility assessment (Strong/Moderate/Weak and why)
+- Bias or motivation
+- **One-line characterization**: [Memorable description]
+
+**DIRECT EXAMINATION (12 strategic questions)**
+
+Foundation (2-3 questions):
+1. [Establishing who they are]
+2. [Establishing their knowledge/presence]
+
+Key facts (6-7 questions building narrative):
+3. [Open-ended question establishing crucial fact]
+4. [Follow-up for detail]
+[Continue strategic progression...]
+
+Credibility building (2-3 questions):
+[Questions that make witness seem honest/reliable]
+
+For each question:
+- **Purpose**: [What this establishes]
+- **Follow-up opportunity**: [Where to go next based on answer]
+- **Emotional moment**: [Questions that create juror connection]
+
+**CROSS-EXAMINATION (12 strategic questions)**
+
+Control & commitment (2-3 questions):
+1. [Leading question establishing undisputed fact]
+2. [Build foundation for attack]
+
+Impeachment/Undermine (7-8 questions):
+3. [Leading question exposing contradiction]
+4. [Follow-up pinning them down]
+[Continue strategic attack...]
+
+Final blow (2-3 questions):
+[Devastating final questions]
+
+For each question:
+- **Strategic goal**: [What you're accomplishing]
+- **Expected answer**: [What they'll likely say]
+- **Impeachment setup**: [How this sets up attack]
+- **If they resist**: [Follow-up if they don't answer as expected]
+
+**POWER MOVES**
+- Best impeachment opportunities
+- Zingers (dramatic questions for effect)
+- Silence moments (when to pause for impact)
+- Exhibits to use during examination
 
 If {witness_name_input} is NOT a witness:
 State: "{witness_name_input} is not identified as a witness in this case packet."
 
 ===CASE PACKET===
 {case_text_processed}
-===END===""",
+===END===
 
-            "Opening Statement Ideas": f"""Draft opening statement frameworks using ONLY case facts.
+Championship-level examination strategy.""",
+
+            "Opening Statement Ideas": f"""Draft championship-level opening statement frameworks.
 
 **PROSECUTION/PLAINTIFF OPENING:**
-1. Hook
-2. Charges
-3. Story
-4. Evidence Preview
-5. Closing Line
+
+1. **Hook (30-45 seconds)** - 3 alternative openings:
+   - **Dramatic quote approach**: [Powerful quote from case]
+   - **Rhetorical question approach**: [Question that frames case]
+   - **Vivid scene approach**: [Describe key moment dramatically]
+
+2. **Theme Statement** (1 sentence that will be repeated):
+   - [Memorable theme based on case facts]
+
+3. **The Story** (3-4 minutes in present tense):
+   - [Chronological narrative with emotional beats]
+   - **Key moments to emphasize**: [3-4 dramatic facts]
+   - **Power phrases to use**: [5-7 memorable lines]
+   - **Repetition device**: [Phrase to repeat throughout]
+
+4. **What We Will Prove** (2 minutes):
+   - Element by element preview
+   - Evidence that proves each (without arguing)
+   - Witness by witness: what each will show
+
+5. **Closing Line** (powerful final statement):
+   - [3 alternative closing lines to choose from]
 
 **DEFENSE OPENING:**
-1. Hook
-2. Burden
-3. Defense Story
-4. Evidence Preview
-5. Closing Line
 
-Use only case facts.
+1. **Hook (30-45 seconds)** - 3 alternative openings:
+   - **Presumption of innocence approach**: [Frame burden powerfully]
+   - **Prosecution weakness approach**: [What they cannot prove]
+   - **Alternative narrative approach**: [Different story opening]
+
+2. **Theme Statement** (1 sentence for reasonable doubt):
+   - [Memorable theme based on case facts]
+
+3. **The Defense Story** (3-4 minutes):
+   - [Alternative narrative or weakness exposition]
+   - **Reasonable doubt moments**: [Facts creating doubt]
+   - **Power phrases**: [5-7 memorable lines]
+   - **Repetition device**: [Phrase to repeat]
+
+4. **What Prosecution Must Prove** (2 minutes):
+   - Elements they cannot meet
+   - Burden of proof emphasis
+   - Gaps in their case
+
+5. **Closing Line** (powerful final statement):
+   - [3 alternative closing lines emphasizing reasonable doubt]
+
+**CHAMPIONSHIP TECHNIQUES TO USE:**
+- Rule of three (listing things in threes)
+- Present tense for immediacy
+- Rhetorical questions for engagement
+- Contrast phrases ("Not X, but Y")
+- Repetition for emphasis
+- Silence/pause for dramatic moments
+
+All based on case facts only.
 
 ===CASE PACKET===
 {case_text_processed}
-===END===""",
+===END===
 
-            "Closing Statement Ideas": f"""Draft closing argument frameworks using ONLY case facts.
+Championship-level opening strategies.""",
+
+            "Closing Statement Ideas": f"""Draft championship-level closing argument frameworks.
 
 **PROSECUTION/PLAINTIFF CLOSING:**
-1. Opening Hook
-2. Elements Proven
-3. Credibility
-4. Defense Rebuttal
-5. Final Appeal
+
+1. **Opening Hook** (powerful 30 seconds):
+   - [3 alternative opening approaches]
+   - Return to opening theme
+   - Emotional connection to case
+
+2. **"Here's What Happened"** (2 minutes):
+   - Reconstruct events with evidence
+   - Use present tense
+   - Dramatic retelling with power phrases
+
+3. **Elements Proven** (4-5 minutes - CORE):
+   - **Element 1**: [Evidence proving it]
+     - Witness quotes supporting
+     - Exhibits confirming
+     - **Power phrase**: [Memorable line]
+   - [Continue for each element]
+   - **After each element**: "Check. Proven. Beyond reasonable doubt."
+
+4. **Credibility** (2-3 minutes):
+   - Why our witnesses are credible (specific reasons)
+   - Why defense witnesses are not (contradictions)
+   - **Catchphrases**: [Memorable characterizations]
+
+5. **Addressing Defense** (2 minutes):
+   - Anticipate their main arguments
+   - Dismantle with evidence
+   - **Powerful rebuttals**: [Specific counter-phrases]
+
+6. **The Stakes** (1 minute):
+   - Why this matters
+   - Justice requires action
+   - Emotional appeal
+
+7. **Final Appeal** (30-45 seconds):
+   - Return to theme
+   - Call to action
+   - **Mic drop moment**: [Devastating final line]
 
 **DEFENSE CLOSING:**
-1. Opening Hook
-2. Burden Not Met
-3. Credibility
-4. Prosecution Rebuttal
-5. Final Appeal
 
-Use only case facts.
+1. **Opening Hook** (powerful 30 seconds):
+   - [3 alternative opening approaches]
+   - Presumption of innocence reminder
+   - Reasonable doubt theme
+
+2. **"Here's What Really Happened" / "Here's What They Cannot Prove"** (2 minutes):
+   - Alternative narrative OR
+   - Systematic dismantling of prosecution case
+   - Emotional tone: righteous defense
+
+3. **Reasonable Doubt** (4-5 minutes - CORE):
+   - **Element 1**: [Why not proven beyond reasonable doubt]
+     - Gaps in evidence
+     - Contradictions
+     - Alternative explanations
+     - **Power phrase**: [Memorable line]
+   - [Continue for each element]
+   - **After each element**: "That's not proof. That's reasonable doubt."
+
+4. **Credibility** (2-3 minutes):
+   - Problems with prosecution witnesses (specific)
+   - Defense witnesses are credible (specific reasons)
+   - **Catchphrases**: [Memorable characterizations]
+
+5. **Addressing Prosecution** (2 minutes):
+   - Anticipate their closing
+   - Pre-emptively dismantle
+   - Burden of proof emphasis
+   - **Powerful rebuttals**: [Specific counter-phrases]
+
+6. **The Stakes** (1 minute):
+   - Presumption of innocence is cornerstone of justice
+   - Reasonable doubt protects us all
+   - Cannot convict on speculation
+
+7. **Final Appeal** (30-45 seconds):
+   - Return to reasonable doubt theme
+   - Acquittal is only just verdict
+   - **Mic drop moment**: [Powerful final line]
+
+**CHAMPIONSHIP TECHNIQUES:**
+- Repetition (repeat key phrases 3 times)
+- Rule of three
+- Rhetorical questions
+- Silence for emphasis
+- Vary pacing (slow for important moments)
+- Contrast phrases
+- Callback to opening
+- Use "you" to address jurors directly
+
+**POWER PHRASES BANK** (10-15 memorable lines from case facts):
+1. [Catchphrase based on key fact]
+2. [Rhetorical question]
+3. [Contrast phrase]
+[Continue with case-specific phrases]
+
+All based on case facts only.
 
 ===CASE PACKET===
 {case_text_processed}
-===END==="""
+===END===
+
+Championship-level closing strategies."""
         }
         
-        with st.spinner("🤔 Analyzing case (15-25 seconds)..."):
+        with st.spinner("🤔 Conducting championship-level analysis (20-30 seconds)..."):
             if analysis_type in ["Full Case Analysis", "Key Facts Only", "Prosecution Arguments", "Defense Arguments"]:
+                max_tokens_to_use = 2600  # Increased for richer analysis
+            elif analysis_type in ["Opening Statement Ideas", "Closing Statement Ideas"]:
                 max_tokens_to_use = 2400
             else:
-                max_tokens_to_use = 1800
+                max_tokens_to_use = 2000
             
             result, tokens = call_openai(
                 base_system, 
                 prompts[analysis_type],
                 max_tokens=max_tokens_to_use,
-                temperature=0.25
+                temperature=0.2  # Lower for accuracy
             )
             
             if result:
@@ -538,7 +811,7 @@ Use only case facts.
                     mime="text/plain"
                 )
                 
-                st.markdown(f'<p class="cost-display">Cost: ${cost:.4f}</p>', unsafe_allow_html=True)
+                st.markdown(f'<p class="cost-display">Analysis cost: ${cost:.4f}</p>', unsafe_allow_html=True)
 
 # ==========================================
 # MODE 2: CROSS-EXAMINATION SIMULATOR
@@ -607,7 +880,7 @@ CRITICAL RULES:
 2. Answer ONLY based on {witness_name}'s witness statement
 3. Stay 100% consistent with testimony
 4. If asked about something unknown: "I don't know" or "I don't recall"
-5. For improper questions: "OBJECTION: [reason]"
+5. For improper questions: "OBJECTION: [specific reason]"
 6. Do NOT invent facts
 
 Examination type: {exam_type}
@@ -641,7 +914,7 @@ You are {witness_name}. Respond only based on what {witness_name} testified to a
             key=f"question_{len(st.session_state.conversation_history)}"
         )
         
-        col1, col2 = st.columns([3, 1])
+        col1, col2, col3 = st.columns([2, 1, 1])
         
         with col1:
             if st.button("📤 Ask Question") and user_question:
@@ -660,7 +933,7 @@ Previous questions:
 New question: {user_question}
 
 Respond as {st.session_state.witness_name}:
-- If improper: "OBJECTION: [reason]"
+- If improper: "OBJECTION: [specific reason]"
 - If proper: Answer based ONLY on testimony
 - Do NOT invent facts"""
                     
@@ -684,6 +957,82 @@ Respond as {st.session_state.witness_name}:
                         st.rerun()
         
         with col2:
+            # NEW FEATURE: Get Feedback Button
+            if st.button("📋 Get Feedback") and len(st.session_state.conversation_history) >= 3:
+                with st.spinner("🎓 Analyzing your examination..."):
+                    # Create feedback prompt
+                    questions_only = [ex['question'] for ex in st.session_state.conversation_history]
+                    
+                    feedback_prompt = f"""You are a championship mock trial coach providing feedback on this {st.session_state.exam_type.split()[0]} examination.
+
+EXAMINATION TRANSCRIPT:
+{chr(10).join([f"Q{i+1}: {q}" for i, q in enumerate(questions_only)])}
+
+PROVIDE DETAILED FEEDBACK:
+
+**OVERALL ASSESSMENT** (1-2 sentences on performance level)
+
+**STRENGTHS** (2-3 specific things done well):
+- [What worked and why]
+
+**AREAS FOR IMPROVEMENT** (3-4 specific issues):
+1. [Issue with example question]
+   - Why this is problematic
+   - How to fix it
+   - Better alternative question
+
+**QUESTION-BY-QUESTION NOTES** (for key questions):
+- Q[number]: [Specific feedback]
+  - [What could be improved]
+  - [Suggested rewrite]
+
+**{"CROSS-EXAMINATION" if "Cross" in st.session_state.exam_type else "DIRECT EXAMINATION"} PRINCIPLES VIOLATED OR FOLLOWED**:
+- [Specific rules and how questions aligned/violated them]
+
+**CHAMPIONSHIP-LEVEL TIPS**:
+- [2-3 advanced techniques to incorporate]
+- [Strategic improvements for this specific witness]
+
+**SUGGESTED QUESTIONS TO ADD** (3-5 questions you should have asked):
+1. [Better question with explanation of why]
+2. [Another strong question]
+
+Be specific. Use actual questions from transcript. Give actionable advice."""
+
+                    system_msg = "You are an expert mock trial coach who has coached championship teams. Provide constructive, specific, actionable feedback."
+                    
+                    feedback, tokens = call_openai(
+                        system_msg,
+                        feedback_prompt,
+                        max_tokens=1200,
+                        temperature=0.3
+                    )
+                    
+                    if feedback:
+                        cost = estimate_cost(tokens)
+                        st.session_state.total_cost += cost
+                        
+                        # Display feedback in special section
+                        st.markdown('<div class="feedback-section">', unsafe_allow_html=True)
+                        st.markdown("## 🎓 Championship Coach Feedback")
+                        st.markdown(feedback)
+                        st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        # Download feedback option
+                        st.download_button(
+                            "📥 Download Feedback",
+                            data=feedback,
+                            file_name=f"examination_feedback_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                            mime="text/plain",
+                            key="download_feedback"
+                        )
+                        
+                        st.markdown(f'<p class="cost-display">Feedback cost: ${cost:.4f}</p>', unsafe_allow_html=True)
+            
+            elif st.button("📋 Get Feedback") and len(st.session_state.conversation_history) < 3:
+                st.warning("⚠️ Ask at least 3 questions before requesting feedback")
+        
+        with col3:
             if st.button("🔄 End"):
                 st.session_state.cross_exam_mode = False
                 st.session_state.conversation_history = []
@@ -695,12 +1044,22 @@ Respond as {st.session_state.witness_name}:
             if "Cross" in st.session_state.exam_type:
                 st.markdown("""
                 **Cross-Examination Rules:**
-                - Use leading questions
+                - Use leading questions (suggest the answer)
                 - One fact per question
                 - Control the witness
+                - Never ask "why" or open-ended questions
+                - Build foundation before impeachment
                 
-                ✅ Good: "You were 50 feet away, correct?"
-                ❌ Bad: "How far away were you?"
+                **Championship Techniques:**
+                - Use short, punchy questions
+                - Commit witness to facts before attack
+                - Save best impeachment for end
+                - Use silence after damaging answers
+                
+                ✅ **Good**: "You were 50 feet away, correct?"
+                ✅ **Good**: "You never told police about this, did you?"
+                ❌ **Bad**: "How far away were you?"
+                ❌ **Bad**: "Can you explain what happened?"
                 """)
             else:
                 st.markdown("""
@@ -708,9 +1067,19 @@ Respond as {st.session_state.witness_name}:
                 - Use open-ended questions
                 - Let witness tell their story
                 - No leading questions
+                - Build narrative chronologically
+                - Establish credibility first
                 
-                ✅ Good: "What did you observe?"
-                ❌ Bad: "You saw the defendant, didn't you?"
+                **Championship Techniques:**
+                - Start with who/what/where foundation
+                - Ask for specific details that matter
+                - Slow down for key moments
+                - End on strong note
+                
+                ✅ **Good**: "What did you observe?"
+                ✅ **Good**: "Describe what happened next."
+                ❌ **Bad**: "You saw the defendant, didn't you?"
+                ❌ **Bad**: "It was raining that night, correct?"
                 """)
 
 # ==========================================
@@ -719,9 +1088,9 @@ Respond as {st.session_state.witness_name}:
 
 st.markdown("---")
 st.caption("""
-**About:** AI-powered mock trial preparation tool. The AI analyzes only facts explicitly stated in your case packet.
+**About:** Championship-level AI-powered mock trial preparation tool. The AI analyzes only facts explicitly stated in your case packet and provides strategic insights inspired by national championship performances.
 
-**Disclaimer:** AI-generated analysis may contain errors. Always verify information and use your own legal reasoning.
+**Disclaimer:** AI-generated analysis may contain errors. Always verify information and use your own legal reasoning. This tool is for educational purposes only.
 
-*Python • Streamlit • OpenAI GPT-3.5 • Built by Vihaan Paka-Hegde*
+*Python • Streamlit • OpenAI GPT-3.5 • Built by Vihaan Paka-Hegde, University High School*
 """)
