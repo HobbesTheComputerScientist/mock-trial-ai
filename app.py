@@ -3,6 +3,7 @@ from openai import OpenAI
 import PyPDF2
 import io
 import datetime
+import random
 
 # ==========================================
 # PAGE CONFIGURATION
@@ -144,7 +145,6 @@ def aggressive_preprocess(case_text):
 def smart_summarize_case(case_text):
     """
     Use AI to condense while preserving ALL legal content.
-    FIXED: Uses 3500 max_tokens (well under 4096 limit)
     """
     if len(case_text) <= 16000:
         return case_text
@@ -236,10 +236,12 @@ if 'objection_case_text' not in st.session_state:
     st.session_state.objection_case_text = ""
 if 'objection_witness' not in st.session_state:
     st.session_state.objection_witness = ""
-if 'saved_objection_exam_type' not in st.session_state:  # FIXED: Changed name
+if 'saved_objection_exam_type' not in st.session_state:
     st.session_state.saved_objection_exam_type = ""
 if 'show_result' not in st.session_state:
     st.session_state.show_result = False
+if 'question_count' not in st.session_state:
+    st.session_state.question_count = 0
 
 # ==========================================
 # HEADER
@@ -270,7 +272,7 @@ with st.sidebar:
     elif mode == "Cross-Examination Simulator":
         st.info("AI simulates a witness based strictly on their testimony.")
     else:
-        st.info("Practice objecting to improper questions. AI will explain rulings.")
+        st.info("Practice objecting to improper questions. Mix of proper and improper questions.")
 
 # ==========================================
 # MODE 1: CASE ANALYSIS
@@ -645,7 +647,7 @@ Provide: overall assessment, strengths, improvements, question-by-question notes
         st.markdown(f'<p class="cost-display">Session: ${st.session_state.total_cost:.4f}</p>', unsafe_allow_html=True)
 
 # ==========================================
-# MODE 3: OBJECTION PRACTICE
+# MODE 3: OBJECTION PRACTICE (FIXED)
 # ==========================================
 
 else:  # Objection Practice
@@ -681,10 +683,10 @@ else:  # Objection Practice
         )
         
         st.markdown("**Step 3: Choose examination type**")
-        exam_type_input = st.radio(  # FIXED: Changed variable name
+        exam_type_input = st.radio(
             "Type of examination:",
             ["Direct Examination", "Cross-Examination"],
-            key="exam_type_radio"  # FIXED: Different key
+            key="exam_type_radio"
         )
         
         if st.button("🎯 Start Objection Practice", type="primary"):
@@ -702,11 +704,12 @@ else:  # Objection Practice
                 
                 st.session_state.objection_case_text = case_text_processed
                 st.session_state.objection_witness = witness_name
-                st.session_state.saved_objection_exam_type = exam_type_input  # FIXED: Save to different variable
+                st.session_state.saved_objection_exam_type = exam_type_input
                 st.session_state.objection_mode = True
                 st.session_state.objection_history = []
                 st.session_state.current_question = None
                 st.session_state.show_result = False
+                st.session_state.question_count = 0
                 
                 st.rerun()
     
@@ -732,29 +735,59 @@ else:  # Objection Practice
         # Generate new question if needed
         if st.session_state.current_question is None and not st.session_state.show_result:
             with st.spinner("🤔 Generating practice question..."):
-                question_prompt = f"""Generate ONE realistic examination question for objection practice.
+                # Increment question count and determine if should be proper or improper
+                st.session_state.question_count += 1
+                
+                # Randomize: ~50% proper, ~50% improper
+                should_be_proper = random.choice([True, False])
+                
+                question_prompt = f"""You are generating ONE mock trial examination question for objection practice.
+
+CRITICAL INSTRUCTIONS:
+1. Generate {"a PROPER question (no objection needed)" if should_be_proper else "an IMPROPER question (objection should be made)"}
+2. Base the question on FACTS FROM THE CASE ONLY - do NOT invent facts not in the case
+3. Use witness name and case details appropriately
+4. Make the question realistic and educational
 
 Witness: {st.session_state.objection_witness}
 Examination type: {st.session_state.saved_objection_exam_type}
 
-Case context:
-{st.session_state.objection_case_text[:3000]}
+Case excerpt (USE THESE FACTS ONLY):
+{st.session_state.objection_case_text[:2500]}
 
-Generate a question that is either PROPER or IMPROPER for this examination type.
+{"GENERATE A PROPER QUESTION:" if should_be_proper else "GENERATE AN IMPROPER QUESTION:"}
 
-Output format:
-QUESTION: [the actual question]
-RULING: [PROPER or IMPROPER]
-REASON: [If improper, what objection. If proper, why acceptable]
-EXPLANATION: [Brief explanation]
+{f'''For {st.session_state.saved_objection_exam_type}:
+- Proper question example: "What did you observe at the scene?" or "Describe what happened next."
+- Make it open-ended, non-leading, asks about facts the witness would know from case''' if should_be_proper and st.session_state.saved_objection_exam_type == "Direct Examination" else ""}
 
-Generate realistic question based on case."""
+{f'''For {st.session_state.saved_objection_exam_type}:
+- Proper question example: "You were at the location at 3pm, correct?" or "You told police you didn't see it, didn't you?"
+- Make it leading, one fact, controls witness, based on case facts''' if should_be_proper and st.session_state.saved_objection_exam_type == "Cross-Examination" else ""}
 
+{f'''For {st.session_state.saved_objection_exam_type}:
+- Improper question example: "You saw the defendant run away, didn't you?" (leading on direct)
+- Make it violate direct exam rules: leading, assumes facts, compound''' if not should_be_proper and st.session_state.saved_objection_exam_type == "Direct Examination" else ""}
+
+{f'''For {st.session_state.saved_objection_exam_type}:
+- Improper question example: "Why did you go to the store?" (open-ended on cross)
+- Make it violate cross exam rules: open-ended, asks why, compound, argumentative''' if not should_be_proper and st.session_state.saved_objection_exam_type == "Cross-Examination" else ""}
+
+Output format (EXACT format required):
+QUESTION: [Attorney asks witness: "Your realistic question based on case facts here"]
+RULING: {"PROPER" if should_be_proper else "IMPROPER"}
+REASON: {("[Why this is a proper question for this exam type]" if should_be_proper else "[Specific objection that applies: Leading/Compound/Argumentative/Assumes facts not in evidence/Calls for speculation]")}
+EXPLANATION: [Brief explanation of why this is proper/improper]
+
+Generate ONE realistic question based ONLY on facts from the case provided above."""
+
+                system_msg = "You are a mock trial judge creating educational practice questions. Generate questions based ONLY on case facts provided. Never invent facts. Make proper and improper questions equally challenging."
+                
                 response, tokens = call_openai(
-                    "You are a mock trial judge creating practice questions.",
+                    system_msg,
                     question_prompt,
-                    max_tokens=300,
-                    temperature=0.7
+                    max_tokens=350,
+                    temperature=0.8  # Increased for more variety
                 )
                 
                 if response:
@@ -776,11 +809,17 @@ Generate realistic question based on case."""
                 if line.startswith("QUESTION:"):
                     question_text = line.replace("QUESTION:", "").strip()
                 elif line.startswith("RULING:"):
-                    ruling = line.replace("RULING:", "").strip()
+                    ruling = line.replace("RULING:", "").strip().upper()
                 elif line.startswith("REASON:"):
                     reason = line.replace("REASON:", "").strip()
                 elif line.startswith("EXPLANATION:"):
                     explanation = line.replace("EXPLANATION:", "").strip()
+            
+            # Ensure ruling is either PROPER or IMPROPER
+            if "PROPER" in ruling:
+                ruling = "PROPER"
+            elif "IMPROPER" in ruling:
+                ruling = "IMPROPER"
             
             st.markdown("### 📝 Practice Question")
             st.markdown(f"**Attorney asks:** \"{question_text}\"")
@@ -862,6 +901,7 @@ Generate realistic question based on case."""
                 st.session_state.objection_history = []
                 st.session_state.current_question = None
                 st.session_state.show_result = False
+                st.session_state.question_count = 0
                 st.rerun()
         
         # Show history
