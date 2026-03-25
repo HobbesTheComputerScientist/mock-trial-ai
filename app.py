@@ -296,7 +296,7 @@ if 'witness_statement' not in st.session_state:
 
 st.title("⚖️ Mock Trial Case Analyzer")
 st.markdown("**AI-Powered Case Analysis & Cross-Examination Practice**")
-st.markdown("*Built by Vihaan Paka-Hegde - University High School*")
+st.markdown("*Built by Vihaan Paka-Hegde - San Francisco University High School*")
 st.markdown("---")
 
 # ==========================================
