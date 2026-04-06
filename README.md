@@ -30,7 +30,7 @@ The primary limitation of V1 was the **"Black Box"** nature of the OpenAI API. P
 To overcome the "intelligence ceiling" of simple prompting, the project is moving toward domain-specific fine-tuning. V2 aims to establish appropriate attention weights for legal logic by training on curated case packets. Follow development on GitHub and Hugging Face (@hobbesthecomputerscientist).
 
 ## Real-World Impact
-Integrated into the official mock trial curriculum at San Francisco University High School, this pilot phase focuses on reducing the cognitive load of rapid objection retrieval, finding ideas for case theories, and stress-testing case theories against a dynamic witness.
+While V1 provided a proof of concept, it was ultimately **not moved into a piloting phase.** The lack of specialized weights and the tendency for "fact-blurring" meant the tool was not yet robust enough for high-stakes competition prep. However, it successfully identified the need for a custom-tuned, open-source architecture (Llama) that could be fundamentally altered for legal logic.
 
 ## License
 Distributed under the MIT License.
